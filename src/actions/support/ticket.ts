@@ -198,7 +198,7 @@ export async function addTicketMessage(formData: FormData): Promise<{ success: b
 export async function adminReplyTicket(formData: FormData) {
   return requireStaffPermission('tickets', 'edit', async (admin) => {
     const parsed = adminReplySchema.safeParse(Object.fromEntries(formData.entries()));
-    if (!parsed.success) throw new Error('Ошибка валидации сообщения');
+    if (!parsed.success) return { success: false, error: 'Ошибка валидации сообщения' };
     const { ticketId, message, isInternal, mediaUrl, mediaType, replyToId, orderId } = parsed.data;
 
     const isGlobalStaff = ['OWNER', 'ADMIN'].includes(admin.role);
@@ -206,7 +206,7 @@ export async function adminReplyTicket(formData: FormData) {
       where: isGlobalStaff ? { id: ticketId } : { id: ticketId, tenantId: admin.tenantId ?? 'smmplan' },
       select: { id: true, userId: true, orderId: true, tenantId: true, user: { select: { email: true, isBotOnly: true, telegramId: true } } }
     });
-    if (!ticket) throw new Error('Ticket not found');
+    if (!ticket) return { success: false, error: 'Ticket not found' };
 
     let verifiedOrderId: string | undefined = undefined;
     if (orderId) {
@@ -297,7 +297,7 @@ const changeStatusSchema = z.object({
 export async function changeTicketStatus(formData: FormData) {
   return requireStaffPermission('tickets', 'edit', async (admin) => {
     const parsed = changeStatusSchema.safeParse(Object.fromEntries(formData.entries()));
-    if (!parsed.success) throw new Error('Неверный статус');
+    if (!parsed.success) return { success: false, error: 'Неверный статус' };
     const { ticketId, status } = parsed.data;
 
     const isGlobalStaff = ['OWNER', 'ADMIN'].includes(admin.role);
@@ -354,7 +354,7 @@ const editMessageSchema = z.object({
 export async function editTicketMessage(formData: FormData) {
   return requireStaffPermission('tickets', 'edit', async (user) => {
     const parsed = editMessageSchema.safeParse(Object.fromEntries(formData.entries()));
-    if (!parsed.success) throw new Error('Ошибка редактирования сообщения');
+    if (!parsed.success) return { success: false, error: 'Ошибка редактирования сообщения' };
     const { messageId, newText } = parsed.data;
 
     // Retrieve the old message
@@ -362,9 +362,9 @@ export async function editTicketMessage(formData: FormData) {
       where: { id: messageId },
       include: { ticket: { include: { user: true } } }
     });
-    if (!msg) throw new Error('Message not found');
+    if (!msg) return { success: false, error: 'Message not found' };
     if (msg.sender === 'USER') {
-      throw new Error('You cannot edit user messages');
+      return { success: false, error: 'You cannot edit user messages' };
     }
 
     const ipAddress = await getClientIp('unknown');
@@ -482,7 +482,7 @@ export async function requestTelegramBind(formData: FormData) {
       const parsed = requestBindSchema.safeParse(Object.fromEntries(formData.entries()));
       if (!parsed.success) {
         console.error('[requestTelegramBind] Validation failed:', parsed.error);
-        throw new Error('Invalid ticketId');
+        return { success: false, error: 'Invalid ticketId' };
       }
       const { ticketId } = parsed.data;
       console.info('[requestTelegramBind] Processing ticketId:', ticketId);
@@ -492,10 +492,10 @@ export async function requestTelegramBind(formData: FormData) {
         where: isGlobalStaff ? { id: ticketId } : { id: ticketId, tenantId: admin.tenantId ?? 'smmplan' },
         include: { user: true }
       });
-      if (!ticket) throw new Error('Ticket not found');
+      if (!ticket) return { success: false, error: 'Ticket not found' };
 
       if (!ticket.user.email.startsWith('tg_')) {
-        throw new Error('У пользователя уже есть веб-аккаунт');
+        return { success: false, error: 'У пользователя уже есть веб-аккаунт' };
       }
 
       const host = process.env.NEXT_PUBLIC_APP_URL || 'https://smmplan.pro';
@@ -508,9 +508,10 @@ export async function requestTelegramBind(formData: FormData) {
       await publishMessageSSE(ticketId, savedMsg.id);
 
       revalidatePath(`/admin/tickets/${ticketId}`);
+      return { success: true };
     } catch (err) {
       console.error('[requestTelegramBind] Error:', err);
-      throw err;
+      return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
     }
   });
 }
@@ -525,21 +526,21 @@ export async function adminManualTelegramBind(formData: FormData) {
   return requireStaffPermission('tickets', 'edit', async (admin) => {
     try {
       // W6-5: SUPPORT cannot call manual bind
-      if (!['ADMIN', 'OWNER'].includes(admin.role)) throw new Error('Forbidden: Only ADMIN or OWNER can manually bind Telegram accounts');
+      if (!['ADMIN', 'OWNER'].includes(admin.role)) return { success: false, error: 'Forbidden: Only ADMIN or OWNER can manually bind Telegram accounts' };
 
       const parsed = manualBindSchema.safeParse(Object.fromEntries(formData.entries()));
-      if (!parsed.success) throw new Error('Invalid input');
+      if (!parsed.success) return { success: false, error: 'Invalid input' };
       const { ticketId, targetEmail, confirm } = parsed.data;
 
       const ticket = await db.ticket.findFirst({
         where: { id: ticketId, tenantId: admin.tenantId ?? 'smmplan' },
         include: { user: true }
       });
-      if (!ticket) throw new Error('Ticket not found');
+      if (!ticket) return { success: false, error: 'Ticket not found' };
 
       const tempUser = ticket.user;
       if (!tempUser.email.startsWith('tg_') || !tempUser.telegramId) {
-        throw new Error('Этот профиль не является временным Telegram-аккаунтом');
+        return { success: false, error: 'Этот профиль не является временным Telegram-аккаунтом' };
       }
 
       const webUser = await db.user.findUnique({ 
@@ -547,7 +548,7 @@ export async function adminManualTelegramBind(formData: FormData) {
         include: { _count: { select: { orders: true } } }
       });
       if (!webUser) {
-        throw new Error('Целевой аккаунт с таким email не найден');
+        return { success: false, error: 'Целевой аккаунт с таким email не найден' };
       }
 
       // W6-4: Add confirmationToken flow
@@ -627,7 +628,7 @@ export async function adminManualTelegramBind(formData: FormData) {
       return { success: true };
     } catch (err) {
       console.error('[adminManualTelegramBind] Error:', err);
-      throw err;
+      return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
     }
   });
 }
@@ -637,7 +638,7 @@ export async function bulkRefillOrdersAction(ticketId: string, orderIds: string[
     const ticket = await db.ticket.findFirst({
       where: { id: ticketId, tenantId: admin.tenantId ?? 'smmplan' }
     });
-    if (!ticket) throw new Error('Тикет не найден');
+    if (!ticket) return { success: false as const, error: 'Тикет не найден' };
 
     let processedCount = 0;
     const errors: string[] = [];
@@ -718,7 +719,7 @@ export async function bulkRefillOrdersAction(ticketId: string, orderIds: string[
     revalidatePath(`/admin/tickets/${ticketId}`);
     revalidatePath('/admin/refills');
 
-    return { success: true, processedCount, errors };
+    return { success: true as const, processedCount, errors };
   });
 }
 
@@ -728,7 +729,7 @@ export async function bulkRefundOrdersAction(ticketId: string, orderIds: string[
       where: { id: ticketId, tenantId: admin.tenantId ?? 'smmplan' },
       include: { user: true }
     });
-    if (!ticket) throw new Error('Тикет не найден');
+    if (!ticket) return { success: false as const, error: 'Тикет не найден' };
 
     // Check ApiConfig profile to see if the user is a API reseller
     const apiConfig = await db.apiConfig.findUnique({
@@ -744,7 +745,7 @@ export async function bulkRefundOrdersAction(ticketId: string, orderIds: string[
 
     const calculatedRefunds: { order: { id: string; numericId: number; userId: string; remains: number; quantity: number; charge: bigint; tenantId: string }; calculatedAmount: number }[] = [];
 
-    await db.$transaction(async (tx) => {
+    const txResult = await db.$transaction(async (tx) => {
       // Calculate total refund cents first
       let totalToRefundCents = 0;
 
@@ -777,7 +778,10 @@ export async function bulkRefundOrdersAction(ticketId: string, orderIds: string[
         const currentSpentToday = await getAdminSpentToday(admin.id, tx);
         const limitLeft = admin.supportLimitCents - currentSpentToday;
         if (totalToRefundCents > limitLeft) {
-          throw new Error(`Превышен суточный лимит компенсаций оператора. Требуется: ${(totalToRefundCents / 100).toFixed(2)} ₽, Осталось: ${(limitLeft / 100).toFixed(2)} ₽`);
+          return {
+            failed: true as const,
+            error: `Превышен суточный лимит компенсаций оператора. Требуется: ${(totalToRefundCents / 100).toFixed(2)} ₽, Осталось: ${(limitLeft / 100).toFixed(2)} ₽`
+          };
         }
       }
 
@@ -797,7 +801,13 @@ export async function bulkRefundOrdersAction(ticketId: string, orderIds: string[
         processedCount++;
         totalRefundedCents += item.calculatedAmount;
       }
+
+      return { failed: false as const };
     }, { isolationLevel: 'Serializable' });
+
+    if (txResult.failed) {
+      return { success: false as const, error: txResult.error };
+    }
 
     for (const item of calculatedRefunds) {
       CompensationService.trackCompensation(item.order.id).catch(err => console.error('[TicketActions] Failed to track compensation', err));
@@ -818,7 +828,7 @@ export async function bulkRefundOrdersAction(ticketId: string, orderIds: string[
     revalidatePath(`/admin/tickets`);
 
     return { 
-      success: true, 
+      success: true as const, 
       processedCount, 
       totalRefundedAmount: (totalRefundedCents / 100).toFixed(2), 
       errors 

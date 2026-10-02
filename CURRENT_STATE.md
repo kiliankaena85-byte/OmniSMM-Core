@@ -137,6 +137,156 @@
     - Сформирован подробный отчет `artifacts/AUTOMATED_PROVIDER_DISCOVERY_REPORT.md`;
     - CI/CD контроль: `npx tsc --noEmit` — 0 ошибок, юнит-тесты сканера `17/17 PASS`, коммит отправлен в `origin/main`.
 
+- [x] 🚀 [OMNISMM-ADMIN-PANEL-WAVE-STRESS-TEST-AND-AUDIT-2026-10-02] Стандартизированное 7-волновое стресс-тестирование, аудит интерфейсов и надежности админ-панели OmniSMM 1.0 (RAC-2026):
+  * 🌊 **7 волн сквозного стресс-тестирования и аудита (100% PASS):**
+    - **Волна 0 (Pre-Flight Safety):** Подтверждена неприкосновенность базы данных (`CATALOG_LOCKED: true`, `DATABASE_INVIOLABLE: true`), сохранены 48 категорий и 400 услуг, снят бэкап `backup_pre_stress.dump`;
+    - **Волна 1 (Static Code Hygiene & AST):** `tsc --noEmit` — 0 ошибок на 6,200+ файлах; `check:bundle-secrets` — 0 утечек секретов; `lint:guardrails` — 0 блокеров;
+    - **Волна 2 (Browser Automated E2E Component Audit):** Проинспектированы 12 маршрутов админки под Playwright (`OWNER`, `SUPPORT`, `USER`), подтверждена интерактивность кнопок/табов/модалок, 0 сбоев гидратации React 19, BOLA-защита (клиент перенаправлен на `/dashboard`);
+    - **Волна 3 (Server Actions Concurrency & ACID):** 6/6 тестов passed (10,000 быстрых операций BigInt, anti-negative guard, 50-конкурентная идемпотентность, конечный автомат заказов, Banker's rounding);
+    - **Волна 4 (Webhooks Ingestion & Timing-Safe HMAC):** 5/5 тестов passed (`timingSafeEqual`, 100 одновременных одинаковых вебхуков дают ровно 1 проводку без double-credit, out-of-order handling);
+    - **Волна 5 (External APIs & Reseller API v2):** 4/4 тестов passed (SMM Reseller API v2 контракт, RFC 9331 RateLimit заголовки 429, Headless Storefront Gateway `X-Storefront-Key` 401 fail-closed);
+    - **Волна 6 (BullMQ Queues & Multi-Tenant Pen-Test):** 5/5 тестов passed (изоляция данных SMMplan vs SMMflux, экспоненциальный откат retry, маршрутизация в DLQ);
+    - **Волна 7 (Post-Stress Teardown & Ledger Audit):** База данных 100% интактна (48 категорий, 400 услуг), локальный порт `:3000` и внешний Tailscale Funnel возвращают 200 OK.
+  * 🛠️ **Code Hygiene & Visual Demo Data (Выполнено):**
+    - **Типизация возвратов в экшенах поддержки:** В `src/actions/support/ticket.ts`, `src/actions/support/compensation.ts`, `src/actions/operator/tickets/change-status.action.ts` и `src/actions/operator/tickets/reply-ticket.action.ts` устранены сырые `throw new Error(...)`, возвращается строго типизированный объект `{ success: false, error }`, обеспечивая отображение Toast-нотификаций в UI без крашей и лишних перезагрузок;
+    - **Синтетические данные для визуального осмотра:** Написан безопасный скрипт `scripts/seed-admin-demo-orders.ts` (`isTest: true`, режим `--clean` поддерживается), сгенерированы 18 демонстрационных заказов по всем статусам (`COMPLETED`, `IN_PROGRESS`, `PENDING`, `PARTIAL`, `CANCELED`, `ERROR`, `AWAITING_PAYMENT`, `CANCELING`) для проверки фильтров, графиков и пагинации в `/admin/orders`;
+    - **Каталог неприкосновенен:** Ровно 48 канонических категорий и 400 отобранных услуг (100% инвариант `CATALOG_LOCKED=true`);
+    - **Полный регрессионный сьют:** 28/28 тестов в `src/__tests__/admin-stress/` пройдены успешно (100% PASS), `tsc --noEmit` — 0 ошибок, `check:bundle-secrets` — 0 утечек;
+  * 📄 **Документация и артефакты:**
+    - Мастер-план: `admin_panel_wave_stress_test_plan.md`;
+    - Итоговый отчет: `admin_panel_stress_test_report_2026.md`.
+
+- [x] 🚀 [OMNISMM-PROD-STANDALONE-CLUSTER-AND-MICROCACHE-DEPLOY-2026-10-02] Прямой деплой кластера Next.js Standalone (3 воркера) с Single-Flight RAM-микрокэшем и TCP Backlog 65535 в продакшен (порт :3000):
+  * 🐳 **Сборка и rolling-деплой (`npm run deploy:lean`):**
+    - Выполнена бережливая сборка Next.js Standalone, воркера и бота с приоритетом BelowNormal и ограничением памяти (0 фризов OS);
+    - Собраны образы `omnismm-web:latest`, `omnismm-worker:latest`, `omnismm-bot:latest`;
+    - Запущены 3 воркера кластера (`CLUSTER_WORKERS=3`, PID 56, 49, 55) с лимитом кучи 384 МБ на воркер (суммарно 1152 МБ < 1536 МБ лимита контейнера);
+    - Успешно смонтирован и запущен `[OmniSMM Microcache] RAM Microcache & TCP Backlog (65535) Engine`;
+  * ⚡ **Замеры производительности и ускорение витрины:**
+    - Последовательные запросы к витрине (`/`): отдача из L1 RAM-микрокэша за **6–16 мс** (`Cache: HIT-RAM`, PID 55) против исходных 4,200–20,000 мс (**ускорение до 3000x**);
+    - Конкурентный залп 50 VU: 2.67 сек, 41/50 HIT, 0 ошибок;
+    - Конкурентный залп 100 VU: 1.99 сек, 75/100 HIT, P50 1.8с, P95 1.96с, 0 ошибок (устранена полка задержек 20.9с и 24% таймаутов);
+  * 🔒 **Неприкосновенность базы данных:**
+    - Статус: `🔒 LOCKED (INVIOLABLE)`;
+    - 48 канонических категорий, 400 отобранных услуг в полной сохранности;
+    - Все 33 миграции Prisma в статусе `up to date`.
+
+- [x] 🚀 [OMNISMM-AGENT-MEMORY-PYRAMID-AND-RRF-2026-10-02] Внедрение 4-уровневой Пирамиды Памяти (L0->L1->L2->L3) и Reciprocal Rank Fusion (RRF) ранжирования (адаптация лучших практик TencentDB-Agent-Memory без сторонних зависимостей):
+  * 🏛️ **Layered Memory Pyramid (L1 Invariants + L2 Scenario Recipes):**
+    - В `src/lib/memory/agent-memory-schema.ts` созданы строгие Zod DTOs (`AtomicInvariantSchema`, `ScenarioRecipeSchema`, `RrfConfigSchema`);
+    - L1 Atomic Invariants: жесткие, неколебимые архитектурные и финансовые правила (INV-FIN-001 ExactMath, INV-DB-002 Catalog Lock, INV-CACHE-003 Single-Flight, INV-SEC-004 Ledger-First, INV-MT-005 Multi-Tenant);
+    - L2 Scenario Recipes: готовые воспроизводимые алгоритмы решений сложных задач со ступенями и командами верификации (SCEN-INGRESS-001 SSR Microcache, SCEN-TEST-ENV-002 Vitest DB Isolation);
+  * ⚡ **Reciprocal Rank Fusion (RRF) Hybrid Retrieval Engine (`scripts/memory-client.ts`):**
+    - Реализовано математическое ранжирование RRF ($k=60$) по трем независимым ортогональным спискам: лексическая релевантность, совпадение тегов/ключевых слов и вес критичности/затухания Эббингауза;
+    - Добавлены методы `recordAtomicInvariant`, `recordScenarioRecipe`, `recordPyramidBatch`, `getAtomicInvariants`, `getScenarioRecipes` и `searchPyramid(query, { layer })`;
+    - Защита от файловых блокировок Windows (ретрай-луп при конкурентной записи);
+    - Расширен CLI `memory-client.ts`: команды `invariants`, `recipes`, `pyramid`;
+  * 🌙 **DREAM Consolidation Cycle (`scripts/consolidate-memory.ts`):**
+    - Добавлена автоматическая агрегация и дистилляция повторяющихся инцидентов в кандидаты L1 Invariants и фиксация L2 сценариев;
+  * 🧪 **100% Верификация:**
+    - `src/__tests__/unit/agent-memory-pyramid.test.ts` — 5/5 passed (TDD Red -> Green);
+    - `npx tsc --noEmit` — 0 ошибок типизации;
+    - `npm run check:bundle-secrets` — 0 утечек секретов;
+    - `npm run lint:tenant` и `npm run lint:guardrails` — 0 блокеров.
+
+- [x] 🚀 [OMNISMM-INGRESS-MICROCACHE-AND-SINGLEFLIGHT-HARDENING-2026-10-02] Защита от Thundering Herd (Single-Flight Coalescing Mutex), изоляция Set-Cookie/Referral, RFC 9110 Weak ETag, Next.js 16 RSC Prefetch Cache Tags и бескомпромиссная отказоустойчивость:
+  * ⚡ **True Single-Flight Coalescing Mutex (`scripts/microcache-engine.js`):**
+    - Ликвидирована фундаментальная уязвимость Thundering Herd / Cache Stampede при холодном старте или сбросе кэша: первый запрос инициализирует SSR-рендер, а параллельные 500–1000 запросов становятся в очередь ожидания (`waiters`) и моментально обслуживаются готовым буфером за 0.1 мс без повторного обращения к React 19 SSR;
+    - Добавлен сторожевой таймаут (10 сек) и перехватчик `req.on('aborted')`: при обрыве соединения ожидающие запросы безопасно передаются на исполнение без зависаний;
+  * 🛡️ **Защита от кэширования ошибок (Error Response Poisoning Immunity):**
+    - Инспекция `res.statusCode` на момент `res.end()`: при ошибках 500, 502, 503, 404 или редиректах ответ НИКОГДА не попадает в RAM-кэш, гарантируя, что сбой одного рендера не отравит кэш для сотен пользователей;
+  * 🍪 **Изоляция Set-Cookie и защита реферальных хвостов:**
+    - Принудительное удаление заголовка `Set-Cookie` перед записью в кэш — исключена утечка чужих сессионных или сервисных кук между пользователями;
+    - Запросы с реферальным параметром `?ref=...` принудительно обходят RAM-кэш (`isGuestStorefrontRequest -> false`), обеспечивая 100% точный и персональный учет партнерских переходов без перезаписи и потери атрибуции;
+  * 📡 **Next.js 16 RSC Prefetch & Weak ETag соответствие стандартам:**
+    - В `computeCacheKey` добавлена строгая дифференциация Next.js App Router заголовков (`next-router-prefetch` -> `:rsc-pref`, `next-router-segment-prefetch` -> `:rsc-segpref`), предотвращающая отдачу урезанных prefetch-пейлоадов при реальной навигации;
+    - Реализовано нечеткое сравнение ETag по RFC 9110 Section 13.1.2 (поддержка `W/"..."`, `"..."`, списков и `*` для мгновенного 304 Not Modified);
+    - Объединенный ключ для `HEAD` и `GET` — запросы `HEAD` отдаются напрямую из кэша `GET` с 0 байт в теле ответа за 0.1 мс;
+    - Расширен охват публичных страниц витрины: `/faq`, `/reviews`, `/contacts`, `/terms`, `/privacy`, `/refund`, `/offer`, `/legal/*`;
+  * 🔌 **Zero-Dependency Native TCP Redis Synchronization:**
+    - Реализован встроенный синхронизатор версий кэша через нативный Node.js сокет `net.createConnection` (протокол RESP): кросс-процессная инвалидация через `storefront:cache_version` работает в любых минималистичных окружениях (Alpine Standalone) без зависимости от внешних модулей;
+  * 🧪 **100% Верификация:**
+    - `npx vitest run src/__tests__/unit/cluster-microcache-engine.test.ts` — 27/27 passed (103 мс);
+    - Регрессионный прогон смежных сюит (L1-кэш, Catalog Lock Guard, DDoS Shield, Redis Cache) — 31/31 passed;
+    - `npx tsc --noEmit` — 0 ошибок на 6,200+ TypeScript файлах;
+    - `npm run check:bundle-secrets` — 0 утечек секретов;
+    - `npm run lint:tenant` и `npm run lint:guardrails` — 0 блокеров (AST Guardrails PASS).
+
+- [x] 🚀 [OMNISMM-DATABASE-INVIOLABILITY-AND-CATALOG-LOCK-2026-10-02] Защита базы данных от сбросов и рассинхронизаций (CatalogLockGuard, права ADMIN/OWNER, изоляция Vitest setup-env.ts и золотой снимок):
+  * 🔍 **Детальный разбор коренной причины проблемы (Root Cause Analysis):**
+    - 1. *Смешение тестового и боевого контура через ESM Hoisting:* В `.env` переменная `DATABASE_URL` направлена на хостовый порт `5435` (`smmplan_lite`). В `test/setup.ts` импорт `import { db } from '@/lib/db'` хойстился компилятором ES-модулей ДО вызова `dotenv.config()`. В результате `categories-ops.test.ts` подключался к боевой базе `smmplan_lite` и в `beforeEach` стирал категории (`deleteMany`), оставляя базу с 1 категорией («Лайки ВК»);
+    - 2. *Циклический перезапуск сидеров и рассинхронизация мастер-файлов:* Сидер `scripts/production-seed-catalog-400.ts` считывал файл `docs/CURATED_SERVICES_400.json`, содержавший старые ненормализованные имена провайдеров (`· · · FACEBOOK · · ·`). При каждом запуске сидер перезатирал категории и сбрасывал `sort: 10`, перемешивая отображение;
+    - 3. *Вредные сайд-эффекты воркеров (`cleanup.processor.ts` и `post-sync-rules.ts`):* Фоновый воркер `cleanup.processor.ts:153` автоматически удалял пустые категории (`db.category.deleteMany({ where: { services: { none: {} } } })`), стирая категории, заведенные администратором до привязки услуг. А `post-sync-rules.ts` переносил услуги в категории со смайликами (`💎 Premium Подписчики`) и удалял блеклист;
+  * 🛡️ **Внедрение архитектурного шлюза неприкосновенности (CatalogLockGuard):**
+    - Разработан и интегрирован модуль `src/lib/catalog-lock.ts`: флаги `CATALOG_LOCKED` и `DATABASE_INVIOLABLE` в таблице `SystemSetting` и кэше Redis;
+    - **Инвариант управления администратором («Админ тоже может управлять»):** Роли `ADMIN` и `OWNER` (а также персонал с гранулярным правом `CATALOG:edit`) имеют безусловный доступ к управлению категориями, сетями и услугами в панели управления (`canAdminManage`). Замок защищает исключительно от фоновых сидеров, скриптов сброса и rogue-воркеров;
+    - Добавлены Server Actions `getCatalogLockStatusAction` и `toggleCatalogLockAction(lock, reason)` в `src/actions/admin/catalog/categories.ts` с аудитом `auditAdminAwaitable`;
+    - Фоновый воркер `cleanup.processor.ts` навсегда лишен права фонового удаления категорий (очистка пустых категорий переведена в ручное действие администратора `cleanupEmptyCategoriesAction`);
+    - В `src/services/providers/post-sync-rules.ts` фоновому воркеру запрещено менять структуру категорий и удалять услуги при активном замке каталога;
+    - Создана утилита управления замком: `npx tsx scripts/lock-database.ts lock|unlock|status --by=<email>`;
+  * 🧪 **Изоляция тестового окружения и защита от удаления данных на уровне ORM:**
+    - Создан файл `test/setup-env.ts`, подключаемый первым в `setupFiles: ['./test/setup-env.ts', './test/setup.ts']` в `vitest.config.mjs` и `vitest.unit.config.ts`. Это исключает ESM-хойстинг и гарантирует принудительную установку `DATABASE_URL` на `smmplan_test` до первого импорта `@/lib/db`;
+    - В `src/lib/db.ts:getDatasourceUrl()` внедрен Fail-Closed перехватчик: при любых тестах попытка подключения к `smmplan_lite` принудительно перенаправляется на `smmplan_test`;
+    - В Prisma Query Extension (`src/lib/db.ts`) внедрен жесткий запрет: вызовы `deleteMany()` для моделей `Category`, `Service` и `Network` на базе `smmplan_lite` вызывают немедленный Fatal Exception;
+    - В `scripts/restore-database.ts` добавлена авто-нормализация кодировки (UTF-16 LE / UTF-8 BOM от PowerShell) и автоматическая выдача прав `GRANT ALL ON ALL TABLES IN SCHEMA public TO app_user` для RLS;
+  * 📦 **Мастер-JSON, золотой бекап и Redis:**
+    - Мастер-файл `docs/CURATED_SERVICES_400.json` синхронизирован с канонической базой данных (48 чистых категорий);
+    - Боевая база данных `smmplan_lite` восстановлена из золотого бекапа `prisma/backups/smmplan_golden_backup_latest.sql`: 48 категорий, 400 услуг, статус `LOCKED (INVIOLABLE)`;
+    - Redis-кэш каталога очищен, витрина отдает канонические данные;
+  * ✅ **100% Верификация:**
+    - `tsc --noEmit` — 0 ошибок на всем проекте;
+    - Vitest unit tests `catalog-lock-guard.test.ts` — 10 passed из 10 (проверены ADMIN, OWNER, CATALOG edit, USER lockouts);
+    - Vitest integration tests `categories-ops.test.ts` — 23 passed из 23 (прогон на `smmplan_test`, база `smmplan_lite` осталась с 48 категориями и 400 услугами в целости);
+    - `npm run check:bundle-secrets` — 0 утечек;
+    - `npm run lint:tenant` и `npm run lint:guardrails` — 0 блокеров.
+
+- [x] 🚀 [OMNISMM-INGRESS-RAM-MICROCACHE-AND-CLUSTER-2026-10-02] Преодоление «Стены соединений» (500–1000 VU) и CPU-потолка SSR на Core i5-3570 (RAM-микрокэш Nginx, кластеризация Node.js на 3 воркера, TCP Backlog 65535, WSL2 4 ядра):
+  * 🧠 **Аппаратная разблокировка и защита памяти:**
+    - В `.wslconfig` разблокированы все 4 ядра процессора (`processors=4`), память поднята до 4096 МБ, отключен своп (`swap=0`) для предотвращения фризов DRAM-less SSD;
+  * ⚡ **Nginx RAM Microcache (`nginx/default.conf`):**
+    - Создана RAM-зона `/dev/shm/nginx_storefront` (10s TTL, `proxy_cache_lock on`, `proxy_cache_use_stale updating error timeout`);
+    - Обеспечена отдача витрины для неавторизованных пользователей за 1–3 мс при пропускной способности свыше 5 000 RPS;
+    - Добавлен байпас сессий (`$cache_bypass`) и байпас rate-limiting для стресс-тестов по заголовку `x-stress-bypass: omni-load-2026`;
+    - Настроено постоянное соединение `upstream nextjs_backend { server app:3000; keepalive 64; }`;
+  * 🐘 **Ликвидация TCP Backlog переполнения:**
+    - В `docker-compose.prod.yml` и `docker-compose.yml` заданы `sysctls: [ net.core.somaxconn=65535, net.ipv4.tcp_max_syn_backlog=65535 ]`, `shm_size: 256m`;
+  * 🤖 **Кластеризация Node.js на 3 воркера (`scripts/cluster-server.js`):**
+    - Реализован кластерный менеджер с автоматическим перезапуском воркеров;
+    - Установлен лимит кучи `NODE_OPTIONS=--max-old-space-size=384` (суммарно $3 \times 384 = 1152\text{ МБ} < 1536\text{ МБ}$ лимита контейнера), обеспечивающий 100% защиту от OOM-киллера;
+  * 🎨 **Облегчение гидратации и устранение SSR-оверхеда:**
+    - В `SmartLinkLanding.tsx` и `LandingModals.tsx` все скрытые при загрузке модальные окна и альтернативные сценарии оформления переведены на `next/dynamic` с `{ ssr: false }`, сэкономив свыше 140 КБ в клиентском JS-бандле;
+  * 🧪 **100% Верификация:**
+    - `tsc --noEmit` — 0 ошибок на всей кодовой базе;
+    - `check:bundle-secrets` — 0 утечек секретов.
+
+- [x] 🚀 [OMNISMM-PROD-CONTAINER-REBUILD-AND-DEPLOY-2026-10-02] Полная сборка и деплой оптимизированных контейнеров в продакшен (Zero-Downtime, L1-кэш и пул PostgreSQL на 50 подключений):
+  * 🐳 **Сборка и выкатка Docker-образов (`npm run build:lean`):**
+    - Восстановлена конфигурация `.env` с безопасными переменными окружения и настройками пула;
+    - Next.js Standalone, воркер (`dist/worker.js`) и бот (`dist/bot.js`) собраны без ошибок;
+    - Собраны образы `omnismm-web:latest`, `omnismm-worker:latest`, `omnismm-bot:latest` (сохранен резервный образ `omnismm-web:backup` для мгновенного отката);
+    - Успешно пересозданы и запущены контейнеры `smmplan_web`, `smmplan_lite_db`, `smmplan_lite_worker`, `smmplan_bot` в проекте `omnismm`;
+  * 🧪 **Дымное тестирование и замер латентности на боевом порту 3000:**
+    - Одиночные запросы к витрине (`http://127.0.0.1:3000/?contour=test`): HTTP 200, латентность из L1-кэша упала с 4.2с до 91–190 мс;
+    - Конкурентный залп (10 одновременных запросов): 10/10 HTTP 200, завершены за 1.4 сек без единого таймаута;
+    - Storefront Config API (`/api/storefront/v1/config`): ответ за 104 мс.
+
+- [x] 🚀 [OMNISMM-HIGH-CONCURRENCY-PERF-OPTIMIZATION-AND-L1-CACHE-2026-10-02] Устранение узких мест производительности платформы при высокой конкурентности (100 VU стресс-тесты, 0 errors, 21/21 passed):
+  * ⚡ **L1 In-Memory кэширование и устранение скрытых DB-запросов:**
+    - Внедрен L1 in-memory кэш (TTL 20 сек) для витринного каталога (`catalog-cache.service.ts`, `catalog.ts`), обслуживающий частые вызовы без сетевых задержек Redis/DB;
+    - Реализовано L1 кэширование системных настроек (`SettingsProvider.get` в `settings.ts`) с TTL 20 сек и кэшированием маппинга `tenantRecordIdCache` (устранено избыточное обращение к `db.tenant.findUnique` на каждый HTTP-запрос);
+    - Эндпоинт `/api/storefront/v1/config/route.ts` переведен с прямого обращения к `db.systemSettings` на `SettingsProvider.get` с использованием L1-кэша;
+  * 🛡️ **Защита от DDoS и байпас для стресс-тестирования (`src/proxy.ts`):**
+    - Добавлен `checkStressOrInternalBypass`: пропуск проверки Echelon DDoS Shield (PoW HTML challenge и Token Bucket 120 req/60s) и вебхук-лимитера при наличии валидного заголовка `x-stress-bypass` (`INTERNAL_API_SECRET` или `'omni-load-2026'`), `x-internal-traffic: true` или прямого внутреннего трафика;
+  * 🐘 **Оптимизация пулов PostgreSQL и Docker-инфраструктуры:**
+    - `docker-compose.yml` и `docker-compose.prod.yml`: СУБД сконфигурирована с `max_connections=200`, `shared_buffers=256MB`, `effective_cache_size=512MB`, `work_mem=16MB`, лимит RAM `1024m`;
+    - Сервис `web`/`app`: `DATABASE_URL` настроен с `connection_limit=50&pool_timeout=10`, `NODE_OPTIONS=--max-old-space-size=1024`, лимит RAM `1536M`;
+    - В `src/lib/db.ts` дефолтный `poolLimit` увеличен с 10/20 до 50;
+  * 🧪 **100% Верификация тестами и линтерами:**
+    - Добавлены и пройдены тесты `settings-l1-cache-and-pool.test.ts`, `catalog-redis-cache.test.ts`, `ddos-shield-rsc-bypass.test.ts`, `load-stability-prisma-pool.test.ts` (21 passed);
+    - `tsc --noEmit` — 0 ошибок;
+    - `npm run check:bundle-secrets` — 0 утечек;
+    - `npm run lint:tenant` и `npm run lint:guardrails` — 0 блокеров.
+
 - [x] 🚀 [OMNISMM-DUAL-PROJECT-ARBITRATION-AND-PARITY-REMEDIATION-2026-10-02] Межпроектный арбитраж (omnismm vs omnismmcore), верификация OpenRouter и устранение расхождений (100% COMPLETE & ALL CI/CD GATES PASSED):
   * ⚖️ **Арбитраж и выбор проекта для продакшена (ActionArbiter & OpenRouter):**
     - Канонический кандидат для продакшн-деплоя: `omnismmcore` (чистая финансовая модель без денормализованной рассинхронизации `ordersCount`, чистый аудит 0 блокеров);

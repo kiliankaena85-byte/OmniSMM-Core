@@ -35,7 +35,7 @@ export async function replyTicketAction(data: {
         select: { id: true, userId: true, tenantId: true },
       });
       if (!ticket || (admin.tenantId && ticket.tenantId && admin.tenantId !== 'smmplan' && ticket.tenantId !== admin.tenantId)) {
-        throw new Error('Обращение не найдено или доступ ограничен');
+        return { success: false as const, error: 'Обращение не найдено или доступ ограничен' };
       }
 
       const sender = isInternal ? 'INTERNAL' : 'STAFF';

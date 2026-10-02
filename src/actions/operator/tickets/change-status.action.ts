@@ -30,7 +30,7 @@ export async function changeTicketStatusAction(data: {
         select: { status: true, tenantId: true },
       });
       if (!oldTicket || (admin.tenantId && oldTicket.tenantId && admin.tenantId !== 'smmplan' && oldTicket.tenantId !== admin.tenantId)) {
-        throw new Error('Обращение не найдено или доступ ограничен');
+        return { success: false as const, error: 'Обращение не найдено или доступ ограничен' };
       }
 
       await db.ticket.update({

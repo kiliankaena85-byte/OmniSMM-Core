@@ -77,7 +77,7 @@ export async function logManualCompensation(formData: FormData) {
         });
 
         if (!policyCheck.allowed) {
-          throw new Error(policyCheck.error);
+          return { failed: true as const, error: policyCheck.error };
         }
 
         // eslint-disable-next-line no-useless-assignment
@@ -143,8 +143,12 @@ export async function logManualCompensation(formData: FormData) {
           }
         });
 
-        return { financialActionId: financialAction.id, warnings: policyCheck.warnings };
+        return { failed: false as const, financialActionId: financialAction.id, warnings: policyCheck.warnings };
       });
+
+      if (actionResult.failed) {
+        return { success: false as const, error: actionResult.error };
+      }
 
       // Awaitable Audit Log
       await auditAdminAwaitable({
