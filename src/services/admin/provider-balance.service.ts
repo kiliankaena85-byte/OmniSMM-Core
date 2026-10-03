@@ -183,6 +183,7 @@ export class ProviderBalanceService {
       // ── Balance Alert (deduped per 1h via Redis atomic lock) ───────────────
       if (status === 'critical' || status === 'warning') {
         const alertKey = `provider:${provider.id}:balance_alert:${status}`;
+        try {
           // Atomic lock: 'NX' prevents TOCTOU alert storms during concurrent checks
           const lockAcquired = await redis.set(alertKey, '1', 'EX', 3600, 'NX');
           if (lockAcquired === 'OK') {

@@ -10,6 +10,7 @@ export class OrderTimeseriesService {
     endDate: Date,
     step: 'hour' | 'day' | 'week' | 'month',
     tenantId?: string
+  ) {
     // Quantize timestamps to 30-second buckets to ensure high cache hit rate across frequent dashboard renders
     const qStartDate = new Date(Math.floor(startDate.getTime() / 30_000) * 30_000);
     const qEndDate = new Date(Math.floor(endDate.getTime() / 30_000) * 30_000);
