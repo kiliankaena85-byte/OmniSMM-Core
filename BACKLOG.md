@@ -142,3 +142,20 @@
    - **Что сделать:**
      - Реализовать распределение очередей BullMQ по провайдерам (`sync-provider-{id}`) для параллельной обработки.
 
+
+---
+
+## 🚨 5. Критические находки пост-деплой аудита (2026-10-03, v1.7)
+
+| ID | Задача | Эпик | Приоритет | Статус |
+|---|---|---|---|---|
+| **SEC-001** | RBAC-bypass в `src/actions/admin/tester-invites.ts`: `requireStaffPermission` вызывался без callback, отказ игнорировался → любой мог генерировать/отзывать инвайты и выставлять `isTester`. | Security | **P0** | 🟡 Исправлено в ветке `fix/post-deploy-db-pool-and-sync-noise` (e15d0f2), **не смёрджено**. Проверить, был ли код в проде (образ собран ~18:13, до `908bba0`). |
+| **TECH-001** | `main` (коммит `908bba0`) не компилируется (TS1005 в `provider-balance.service.ts`, `order-timeseries.service.ts`). Пересборка из `main` упадёт. | Tech Debt | **P0** | 🟡 Исправлено в ветке (5eeea27), ждёт merge. |
+| **OPS-001** | Пул Prisma: 49/60 соединений PG при 4 cluster-воркерах. | Ops | P1 | 🟡 Исправлено в ветке (`db-pool-size.ts`, бюджет 36). Нужен нагрузочный тест на Stage `:3005` по BGS-2026. |
+| **OPS-002** | Stream-Promotion: `Incorrect order ID` для заказов `cmur67n3d0009vainvulm8g85`, `cmur67n3r000bvainbpio1bmp`, `cmur67n7t000vvain561wzlwp` — зависли в `IN_PROGRESS`, опрос каждые 5 мин. | Ops | P1 | ✋ MANUAL_ACTION (решение: отмена/возврат). Шум логов снижен троттлингом. |
+| **SEC-002** | `src/app/api/depin/auth/route.ts`: вызывался несуществующий `tokenResolver.resolveBotToken`, TypeError глотался → всегда env-токен. Теперь `resolveTelegramToken(tenantId)` (смена поведения). | Security | P1 | 🟡 В ветке. Проверить токены тенантов перед выкаткой. |
+| **QA-008** | `scripts/smoke-live-container.ts` пишет в БД (isTester, заказ #158125, `WalletOps.charge` 100 ₽). Сделать read-only или направить на тестовую БД; проверить/очистить тестовые данные, если `.env` указывал на прод. | QA | P1 | ⏳ IN_BACKLOG |
+| **TECH-002** | `lint-zero-any`: 55 нарушений в ~13 файлах (UI `tester-invites*`, `catalog-cache.service.ts`, тесты). | Tech Debt | P1 | ⏳ IN_BACKLOG |
+| **FIN-001** | B4 `referralDebit`: семантика реферального овердрафта (из `SPEC-REDTEAM-FIN-CORE-2026`). | Finance | P1 | ⏳ IN_BACKLOG |
+| **QA-009** | Тесты с `test/setup.ts` бьют в БД: 5–35 с на тест, `Hook timed out`/таймауты в `provider-balance` (stress-тесты) при нагрузке CPU. | QA | P2 | ⏳ IN_BACKLOG |
+| **SEC-003** | HSTS не подтверждён на публичном домене (на `127.0.0.1` отсутствует). | Security | P2 | ⏳ IN_BACKLOG |
