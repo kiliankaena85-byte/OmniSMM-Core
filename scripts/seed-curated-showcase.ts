@@ -748,6 +748,13 @@ const CURATED_CATALOG: CuratedNetworkDef[] = [
 ];
 
 async function main() {
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  if (isLocked) {
+    console.error('⛔ [INVIOLABLE DATABASE GUARD] Catalog is LOCKED. seed-curated-showcase is aborted.');
+    process.exit(1);
+  }
+
   console.log('🚀 Seeding Curated Showcase with ~900% Markup (10.0x Multiplier)...');
 
   // Update SystemSettings global markup to 10.0

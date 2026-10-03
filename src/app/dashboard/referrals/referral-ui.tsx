@@ -97,6 +97,8 @@ export function ReferralUi({
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccess, setTransferSuccess] = useState<string | null>(null);
   const router = useRouter();
+  // INV-REF-01: negative referralBalance = clawback debt repaid from future commissions
+  const isReferralDebt = earnedRub < 0;
 
   // Calculator state
   const [calcReferrals, setCalcReferrals] = useState(10);
@@ -176,10 +178,14 @@ export function ReferralUi({
           },
           {
             icon: CreditCard,
-            label: 'Доступно к переводу',
-            value: earnedRub.toLocaleString('ru-RU', { minimumFractionDigits: 2 }),
+            label: isReferralDebt ? 'Задолженность' : 'Доступно к переводу',
+            value: isReferralDebt
+              ? `−${Math.abs(earnedRub).toLocaleString('ru-RU', { minimumFractionDigits: 2 })}`
+              : earnedRub.toLocaleString('ru-RU', { minimumFractionDigits: 2 }),
             suffix: '₽',
-            color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+            color: isReferralDebt
+              ? 'text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20'
+              : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
           },
           {
             icon: TrendingUp,
@@ -331,6 +337,17 @@ export function ReferralUi({
             <CreditCard className="w-4 h-4" />
             <span>{isTransferring ? 'Перевод...' : `Перевести ${earnedRub.toFixed(2)} ₽`}</span>
           </button>
+        </div>
+      )}
+
+      {/* 3b. Referral debt notice (INV-REF-01: clawback after a cancelled order) */}
+      {isReferralDebt && (
+        <div role="status" className="bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-300 rounded-3xl p-5 flex items-start gap-3 text-sm">
+          <CreditCard className="w-5 h-5 shrink-0 mt-0.5" aria-hidden="true" />
+          <p>
+            Задолженность <strong className="font-black tabular-nums">−{Math.abs(earnedRub).toFixed(2)} ₽</strong> возникла из-за отмены оплаченного заказа приглашённого клиента.
+            Она погасится автоматически из ваших будущих начислений — основной баланс не затрагивается.
+          </p>
         </div>
       )}
 

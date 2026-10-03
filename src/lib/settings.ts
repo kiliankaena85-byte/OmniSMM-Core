@@ -8,6 +8,8 @@ import { normalizeTenantId, registerValidTenant } from "@/lib/tenant-resolver-ed
 import { TENANT_ALIASES } from "@/config/tenants";
 
 const localSettingsCache: Record<string, { data: SystemSettings; expiresAt: number }> = {};
+const tenantRecordIdCache = new Map<string, string>();
+const SETTINGS_L1_TTL_MS = 20 * 1000; // 20s L1 in-memory TTL to prevent connection pool exhaustion under load
 const CACHE_TTL_MS = 60 * 1000; // 1 minute cache for workers
 
 export interface DecryptedPaymentSecrets {
@@ -67,15 +69,7 @@ export class SettingsProvider {
    * Clears the in-memory fallback cache for workers/CLI.
    */
   static invalidateLocalCache(tenantId?: string) {
-    if (tenantId) {
-      const cleanSlug = normalizeTenantId(tenantId) || 'smmplan';
-      delete localSettingsCache[cleanSlug];
-      delete localSettingsCache[tenantId];
-    } else {
-      for (const k of Object.keys(localSettingsCache)) {
-        delete localSettingsCache[k];
-      }
-    }
+    SettingsProvider.clearMemoryCache(tenantId);
   }
 
   /**
@@ -160,11 +154,18 @@ export class SettingsProvider {
    */
   static async resolveTenantRecordId(tenantSlug: string): Promise<string> {
     const slug = normalizeTenantId(tenantSlug) || 'smmplan';
+    if (!SettingsProvider.isTestEnvironment()) {
+      const cached = tenantRecordIdCache.get(slug);
+      if (cached) return cached;
+    }
     const tenant = await db.tenant.findUnique({ where: { slug } }) 
       || await db.tenant.findFirst({ where: { slug: 'smmplan' } })
       || await db.tenant.findFirst();
-    if (tenant) return tenant.id;
-    return slug;
+    const resolved = tenant ? tenant.id : slug;
+    if (!SettingsProvider.isTestEnvironment()) {
+      tenantRecordIdCache.set(slug, resolved);
+    }
+    return resolved;
   }
 
   /**
@@ -173,11 +174,22 @@ export class SettingsProvider {
   static async get(tenantId?: string): Promise<SystemSettings> {
     const rawId = tenantId || await this.getTenantId();
     const normalizedSlug = normalizeTenantId(rawId) || 'smmplan';
+
+    // Fast-path: Check L1 in-memory cache first (0ms, 0 DB queries, 0 connection pool lock)
+    if (!SettingsProvider.isTestEnvironment()) {
+      const now = Date.now();
+      const cached = localSettingsCache[normalizedSlug] || (rawId ? localSettingsCache[rawId] : undefined);
+      if (cached && cached.expiresAt > now) {
+        return cached.data;
+      }
+    }
+
     const targetTenantId = await this.resolveTenantRecordId(normalizedSlug);
 
     try {
       if (SettingsProvider.isTestEnvironment()) {
         delete localSettingsCache[targetTenantId];
+        delete localSettingsCache[normalizedSlug];
         const fresh = await db.systemSettings.findUnique({ where: { id: targetTenantId } });
         if (fresh) return fresh;
         return await db.systemSettings.upsert({
@@ -187,7 +199,13 @@ export class SettingsProvider {
         });
       }
       try {
-        return await this.getCached(normalizedSlug);
+        const settings = await this.getCached(normalizedSlug);
+        if (settings && !SettingsProvider.isTestEnvironment()) {
+          const expiresAt = Date.now() + SETTINGS_L1_TTL_MS;
+          localSettingsCache[normalizedSlug] = { data: settings, expiresAt };
+          localSettingsCache[targetTenantId] = { data: settings, expiresAt };
+        }
+        return settings;
       } catch (err: unknown) {
         const errMessage = err instanceof Error ? err.message : String(err);
         if (errMessage.includes('incrementalCache') || errMessage.includes('Invariant')) {
@@ -208,7 +226,8 @@ export class SettingsProvider {
             });
           }
 
-          localSettingsCache[targetTenantId] = { data: settings, expiresAt: now + CACHE_TTL_MS };
+          localSettingsCache[targetTenantId] = { data: settings, expiresAt: now + SETTINGS_L1_TTL_MS };
+          localSettingsCache[normalizedSlug] = { data: settings, expiresAt: now + SETTINGS_L1_TTL_MS };
           return settings;
         }
         throw err;
@@ -411,8 +430,8 @@ export class SettingsProvider {
       SITE_DESCRIPTION: settings.siteDescription || "",
       SUPPORT_EMAIL: settings.contactSupportEmail || `support@${defaultDomain}`,
       PRIVACY_EMAIL: settings.contactPrivacyEmail || `privacy@${defaultDomain}`,
-      TELEGRAM_SUPPORT_BOT: settings.contactTelegramBot || branding.bot,
-      TELEGRAM_SUPPORT_CHANNEL: settings.contactTelegramChannel || branding.channel,
+      TELEGRAM_SUPPORT_BOT: (settings.contactTelegramBot === null || settings.contactTelegramBot === "") ? "" : (settings.contactTelegramBot ?? branding.bot),
+      TELEGRAM_SUPPORT_CHANNEL: (settings.contactTelegramChannel === null || settings.contactTelegramChannel === "") ? "" : (settings.contactTelegramChannel ?? branding.channel),
       WHATSAPP: settings.contactWhatsApp || "",
       VK: settings.contactVk || "",
       COMPANY_NAME: settings.legalCompanyName || defaultSiteName,
@@ -480,7 +499,7 @@ export class SettingsProvider {
 
   static async setExchangeRateUSD(rate: number, tenantId?: string) {
     const activeTenantId = tenantId || await this.getTenantId();
-    delete localSettingsCache[activeTenantId];
+    SettingsProvider.clearMemoryCache(activeTenantId);
     await db.systemSettings.upsert({
       where: { id: activeTenantId },
       update: { exchangeRateUSD: rate, exchangeRateUpdatedAt: new Date() },
@@ -506,10 +525,20 @@ export class SettingsProvider {
 
   static clearMemoryCache(tenantId?: string) {
     if (tenantId) {
+      const cleanSlug = normalizeTenantId(tenantId) || tenantId;
       delete localSettingsCache[tenantId];
+      delete localSettingsCache[cleanSlug];
+      tenantRecordIdCache.delete(tenantId);
+      tenantRecordIdCache.delete(cleanSlug);
+    } else {
+      for (const k of Object.keys(localSettingsCache)) {
+        delete localSettingsCache[k];
+      }
+      tenantRecordIdCache.clear();
     }
     delete localSettingsCache['smmplan'];
     delete localSettingsCache['flux'];
+    delete localSettingsCache['smmflux'];
   }
 
   static async setMaintenanceMode(enable: boolean, tenantId?: string) {
@@ -559,7 +588,7 @@ export class SettingsProvider {
 
   static async setRefillModuleEnabled(enable: boolean, tenantId?: string) {
     const activeTenantId = tenantId || await this.getTenantId();
-    delete localSettingsCache[activeTenantId];
+    SettingsProvider.clearMemoryCache(activeTenantId);
     const { redis } = await import('./redis');
     await redis.set(`settings:${activeTenantId}:isRefillModuleEnabled`, String(enable));
     try {
@@ -594,9 +623,7 @@ export class SettingsProvider {
     const activeTenantId = tenantId || await this.getTenantId();
     const isTest = mode !== 'PRODUCTION';
     
-    delete localSettingsCache[activeTenantId];
-    delete localSettingsCache['smmplan'];
-    delete localSettingsCache['flux'];
+    SettingsProvider.clearMemoryCache(activeTenantId);
 
     await db.systemSettings.upsert({
       where: { id: activeTenantId },

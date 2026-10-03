@@ -674,6 +674,17 @@ export function generateMassiveEnterpriseCatalog(): ServiceSeedItem[] {
 }
 
 async function main() {
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  const existingCats = await prisma.category.count();
+  if (isLocked) {
+    console.error(`⛔ [GUARD] Catalog is LOCKED & INVIOLABLE. Aborting seed-enterprise-catalog-800. Unlock via scripts/lock-database.ts unlock first.`);
+    process.exit(1);
+  }
+  if (existingCats > 0 && !process.argv.includes('--force')) {
+    console.error(`⛔ [GUARD] Database already contains ${existingCats} existing categories. Aborting seed-enterprise-catalog-800.`);
+    process.exit(1);
+  }
   console.log('🚀 Starting Enterprise Massive Catalog Population (Target: 700-1000 Services like SMMprime)...');
 
   let mockProvider = await prisma.provider.findFirst({ where: { name: 'Vexboost API (Master)' } });

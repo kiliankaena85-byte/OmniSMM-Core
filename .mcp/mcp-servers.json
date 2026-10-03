@@ -21,10 +21,10 @@
     "typescript-lsp": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-typescript"],
+      "args": ["tsx", "scripts/mcp/tsserver-mcp.ts"],
       "enabled": true,
       "tier": "LEVEL_1_TYPES",
-      "description": "Language Server Protocol для строгой проверки типов и защиты от галлюцинаций"
+      "description": "Language Server Protocol для строгой проверки типов, генерации .d.ts и вычисления blast radius"
     },
     "graphrag-memory": {
       "type": "http",

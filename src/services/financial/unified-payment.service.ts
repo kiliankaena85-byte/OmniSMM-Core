@@ -39,6 +39,17 @@ export class UnifiedPaymentService {
           gateway
         }
       });
+
+      // 1.1 Persist payment metadata to Redis with 24h TTL for webhook order auto-creation
+      if (metadata && typeof metadata === 'object') {
+        try {
+          const { redis } = await import('@/lib/redis');
+          await redis.set(`payment:metadata:${payment.id}`, JSON.stringify(metadata), 'EX', 86400);
+        } catch (err) {
+          console.warn('[UnifiedPayment] Failed to persist payment metadata to redis:', err);
+        }
+      }
+
       const { SettingsProvider } = await import('@/lib/settings');
       const supportDomain = await SettingsProvider.getSupportEmailDomain(resolvedTenantId);
       let successUrl = `${getCanonicalTenantBaseUrl(resolvedTenantId)}/dashboard`;

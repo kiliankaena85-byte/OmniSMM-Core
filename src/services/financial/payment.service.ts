@@ -48,7 +48,8 @@ export class PaymentService {
     gatewayType: 'yookassa' | 'cryptobot' | 'robokassa' = 'yookassa',
     internalPaymentId?: string,
     metadataType?: string,
-    receiptId?: string
+    receiptId?: string,
+    metadata?: Record<string, unknown>
   ): Promise<boolean> {
     const activatedOrders: { id: string; isDripFeed: boolean; userId: string; amount: number; userEmail?: string | null; serviceName?: string | null; numericId?: number; tenantId?: string }[] = [];
     let paidAmountBigInt = BigInt(amount);
@@ -56,26 +57,32 @@ export class PaymentService {
     // Beneficiary resolved from the DB payment record (NOT the caller-supplied userId).
     // Stays null on idempotent replays / no-op transitions -> post-commit side-effects are skipped.
     let creditedUserId: string | null = null;
+    // Payment id resolved inside the transaction; used by post-commit AUTO_ORDER_TOPUP (was an out-of-scope reference).
+    let creditedPaymentId: string | null = null;
     const pendingSecurityAlerts: Array<() => Promise<unknown>> = [];
 
     try {
-      // 1. Double-check against real gateway API in production
-      const isMockPayment = gatewayId.startsWith('test_') || gatewayId.startsWith('mock_');
-      if (process.env.NODE_ENV === 'production' && gatewayType === 'yookassa' && !_isDevSandbox && !isMockPayment) {
-        let paymentTenantId = 'smmplan';
-        await runWithTenantBypass('Webhook pre-check payment tenant resolution', async () => {
+      // 1. Double-check against real gateway API in production (INV-GW-02, SPEC-REDTEAM-GATEWAYS-2026).
+      // The caller-supplied sandbox flag and the id prefix alone are NEVER trusted: verification is skipped
+      // only for a server-issued mock id on a test-mode tenant whose DB gatewayId equals the webhook id.
+      const isMockPayment = gatewayId.startsWith('test_') || gatewayId.startsWith('mock_') || gatewayId.startsWith('yoo_test_mock_');
+      if (process.env.NODE_ENV === 'production' && gatewayType === 'yookassa') {
+        const preCheck = await runWithTenantBypass('Webhook pre-check payment tenant resolution', async () => {
           if (internalPaymentId) {
-            const p = await db.payment.findUnique({ where: { id: internalPaymentId }, select: { tenantId: true } });
-            if (p?.tenantId) paymentTenantId = p.tenantId;
-          } else if (gatewayId) {
-            const p = await db.payment.findUnique({ where: { gatewayId }, select: { tenantId: true } });
-            if (p?.tenantId) paymentTenantId = p.tenantId;
+            return db.payment.findUnique({ where: { id: internalPaymentId }, select: { tenantId: true, gatewayId: true } });
           }
+          if (gatewayId) {
+            return db.payment.findUnique({ where: { gatewayId }, select: { tenantId: true, gatewayId: true } });
+          }
+          return null;
         });
+        const paymentTenantId = preCheck?.tenantId || 'smmplan';
+        const dbGatewayId: string | null = preCheck?.gatewayId ?? null;
 
         const { SettingsManager } = await import('@/lib/settings');
         const isTestMode = await SettingsManager.isTestMode(paymentTenantId);
-        if (!isTestMode) {
+        const isServerIssuedMock = isTestMode && isMockPayment && dbGatewayId === gatewayId;
+        if (!isServerIssuedMock) {
           const secrets = await SettingsManager.getPaymentSecrets(paymentTenantId);
           
           // We attempt to verify with YooKassa if secrets are configured
@@ -91,6 +98,14 @@ export class PaymentService {
                     const data = await response.json();
                     if (data.status !== 'succeeded') {
                         throw new Error(`PAYMENT_NOT_SUCCEEDED: Real gateway status is ${data.status}`);
+                    }
+                    // INV-GW-03: the remote payment must be exactly the one this webhook claims to settle
+                    if (data.id !== gatewayId) {
+                        throw new Error(`PAYMENT_ID_MISMATCH: Remote id ${String(data.id)} != webhook id ${gatewayId}`);
+                    }
+                    const remotePaymentId = data.metadata?.paymentId;
+                    if (internalPaymentId && remotePaymentId && remotePaymentId !== internalPaymentId) {
+                        throw new Error(`PAYMENT_METADATA_MISMATCH: Remote paymentId ${String(remotePaymentId)} != ${internalPaymentId}`);
                     }
                     const realAmountKopecks = parseYooKassaAmountToKopecks(data.amount?.value);
                     if (realAmountKopecks < BigInt(amount)) {
@@ -329,6 +344,7 @@ export class PaymentService {
         paidAmountBigInt = creditAmount;
         isOrderFlow = isOrderPayment || basketOrders.length > 0;
         creditedUserId = targetUserId;
+        creditedPaymentId = processedPaymentId;
       });
 
       // Invalidate user dashboard cache so they see the new order & spending immediately
@@ -357,6 +373,61 @@ export class PaymentService {
         return true;
       }
       const beneficiaryUserId: string = creditedUserId;
+      const processedPaymentId: string | null = creditedPaymentId;
+
+      // [BUG-TG-04 Remediation] Handle AUTO_ORDER_TOPUP post-payment auto execution
+      let resolvedMetadata = metadata;
+      if (!resolvedMetadata) {
+        try {
+          const { redis } = await import('@/lib/redis');
+          const cached = await redis.get(`payment:metadata:${processedPaymentId}`);
+          if (cached) {
+            resolvedMetadata = JSON.parse(cached);
+          }
+        } catch {
+          // ignore redis read error
+        }
+      }
+
+      let isAutoOrderCreated = false;
+      if (resolvedMetadata && (resolvedMetadata.type === 'AUTO_ORDER_TOPUP' || metadataType === 'AUTO_ORDER_TOPUP')) {
+        const serviceId = resolvedMetadata.serviceId as string;
+        const link = resolvedMetadata.link as string;
+        const quantity = Number(resolvedMetadata.quantity);
+        const charge = Number(resolvedMetadata.totalCents);
+        const providerCost = Number(resolvedMetadata.providerCostCents || 0);
+        const runs = resolvedMetadata.runs ? Number(resolvedMetadata.runs) : undefined;
+        const interval = resolvedMetadata.interval ? Number(resolvedMetadata.interval) : undefined;
+        const isLinkOverridden = Boolean(resolvedMetadata.isLinkOverridden);
+
+        if (serviceId && link && quantity && charge) {
+          try {
+            const { orderService } = await import('@/services/core/order.service');
+            const autoOrderRes = await orderService.createOrder(
+              beneficiaryUserId,
+              {
+                serviceId,
+                link,
+                quantity,
+                charge,
+                providerCost,
+                runs,
+                interval,
+                isLinkOverridden
+              },
+              `auto-topup-order-${processedPaymentId}`
+            );
+            if (autoOrderRes.success && autoOrderRes.orderId) {
+              isAutoOrderCreated = true;
+              console.info(`[PaymentService] AUTO_ORDER_TOPUP successfully executed for payment ${processedPaymentId}: order #${autoOrderRes.orderId}`);
+            } else {
+              console.error(`[PaymentService] AUTO_ORDER_TOPUP order creation failed for payment ${processedPaymentId}:`, autoOrderRes.error);
+            }
+          } catch (autoErr) {
+            console.error(`[PaymentService] AUTO_ORDER_TOPUP exception for payment ${processedPaymentId}:`, autoErr);
+          }
+        }
+      }
 
       // Notify user directly in Telegram if user has linked Telegram ID
       try {
@@ -369,7 +440,7 @@ export class PaymentService {
           const { multiBotManager } = await import('@/bot/manager/multi-bot-manager');
           const amountRub = (Number(paidAmountBigInt) / 100).toLocaleString('ru-RU');
           const newBal = (Number(userWithTg.balance) / 100).toFixed(2);
-          if (isOrderFlow || activatedOrders.length > 0) {
+          if (isOrderFlow || activatedOrders.length > 0 || isAutoOrderCreated) {
             await multiBotManager.sendTenantMessage(
               tenantId,
               userWithTg.telegramId,

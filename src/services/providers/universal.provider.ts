@@ -17,6 +17,19 @@ import { z } from 'zod';
 
 export type { ApiMappingDTO };
 
+/**
+ * INV-GW-05 (SPEC-REDTEAM-GATEWAYS-2026): the request MAY have reached the provider and been accepted
+ * (timeout, network failure, 5xx, unparsable 200). Callers must NOT fail over to another provider.
+ * Messages are kept identical to the legacy plain Errors for backward compatibility.
+ */
+export class ProviderAmbiguousError extends Error {
+  readonly isAmbiguous = true;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'ProviderAmbiguousError';
+  }
+}
+
 const ProviderServiceSchema = z.object({
   service: z.union([z.string(), z.number()]).transform(String),
   name: z.string().optional().default("Unknown Service"),
@@ -181,10 +194,12 @@ export class UniversalProvider implements BaseProvider {
           } catch {
             // Ignore JSON parse error, fall back to default HTTP error
           }
+          // INV-GW-05: a 5xx may be returned after the provider already accepted the request
+          const HttpErr = response.status >= 500 ? ProviderAmbiguousError : Error;
           if (parsedError) {
-             throw new Error(parsedError);
+             throw new HttpErr(parsedError);
           }
-          throw new Error(`Provider HTTP Error: ${response.status}`);
+          throw new HttpErr(`Provider HTTP Error: ${response.status}`);
         }
 
         const text = await response.text();
@@ -202,7 +217,7 @@ export class UniversalProvider implements BaseProvider {
           await CircuitBreaker.recordSuccess(this.apiUrl);
           return data;
         } catch (jsonErr: unknown) {
-          throw new Error(`Provider returned invalid JSON: ${text.substring(0, 100)}...`, { cause: jsonErr });
+          throw new ProviderAmbiguousError(`Provider returned invalid JSON: ${text.substring(0, 100)}...`, { cause: jsonErr });
         }
 
       } catch (error: unknown) {
@@ -213,14 +228,17 @@ export class UniversalProvider implements BaseProvider {
               continue;
            }
            await CircuitBreaker.recordFailure(this.apiUrl);
-           throw new Error('Provider Request Timeout (15s)', { cause: error });
+           throw new ProviderAmbiguousError('Provider Request Timeout (15s)', { cause: error });
         }
         
         if (errName !== 'CircuitBreakerOpenException' && attempt === retries) {
           await CircuitBreaker.recordFailure(this.apiUrl);
         }
 
-        if (attempt === retries) throw error;
+        // INV-GW-05: network-level failure (undici TypeError 'fetch failed') — request may have reached the provider
+        if (attempt === retries) {
+          throw (error instanceof TypeError) ? new ProviderAmbiguousError(error.message, { cause: error }) : error;
+        }
       } finally {
         clearTimeout(timeoutId);
       }
@@ -333,7 +351,7 @@ export class UniversalProvider implements BaseProvider {
        if (err) throw new Error(String(err));
        
        const orderId = this.extractNested(res, this.mapping.response.orderIdField);
-       if (!orderId) throw new Error("Order ID not found in provider response");
+       if (!orderId) throw new ProviderAmbiguousError("Order ID not found in provider response");
        
        return { order: String(orderId) };
     } else {

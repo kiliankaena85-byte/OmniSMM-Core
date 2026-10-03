@@ -16,6 +16,10 @@ services:
     networks: [frontend]
     security_opt:
       - no-new-privileges:true
+    shm_size: 256m
+    sysctls:
+      - net.core.somaxconn=65535
+      - net.ipv4.tcp_max_syn_backlog=65535
     logging:
       driver: "json-file"
       options:
@@ -35,7 +39,9 @@ services:
     environment:
       - RUN_MIGRATIONS=true
       - SKIP_BOT=true
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public&connection_limit=15&pool_timeout=15
+      - NODE_OPTIONS=--max-old-space-size=384
+      - CLUSTER_WORKERS=3
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public&connection_limit=50&pool_timeout=10
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
     depends_on:
       db:
@@ -46,6 +52,9 @@ services:
     networks: [frontend, backend]
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      - net.core.somaxconn=65535
+      - net.ipv4.tcp_max_syn_backlog=65535
     logging:
       driver: "json-file"
       options:
@@ -54,7 +63,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 1536M
 
   worker:
     container_name: smmplan_worker
@@ -146,9 +155,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     command: >
       postgres
-      -c max_connections=150
+      -c max_connections=200
       -c shared_buffers=256MB
-      -c work_mem=4MB
+      -c work_mem=16MB
       -c maintenance_work_mem=64MB
       -c effective_cache_size=512MB
       -c autovacuum_vacuum_scale_factor=0.05

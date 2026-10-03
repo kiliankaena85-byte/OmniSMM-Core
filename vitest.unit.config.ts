@@ -11,7 +11,7 @@ export default defineConfig({
     hookTimeout: 60000,
     maxWorkers: 1,
     fileParallelism: false,
-    setupFiles: ['./test/setup.ts'],
+    setupFiles: ['./test/setup-env.ts', './test/setup.ts'],
     alias: {
       '@': path.resolve(__dirname, './src'),
       'server-only': path.resolve(__dirname, './node_modules/server-only/empty.js'),

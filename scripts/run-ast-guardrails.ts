@@ -146,17 +146,31 @@ export class AstGuardrailsEngine {
       // ПРАВИЛО 5: Server Actions не должны выбрасывать сырой throw
       // -------------------------------------------------------------
       if (isActionFile && ts.isThrowStatement(node)) {
-        let parent: ts.Node | undefined = node.parent;
+        let current: ts.Node | undefined = node.parent;
         let isInsideCatch = false;
-        while (parent && !ts.isFunctionDeclaration(parent) && !ts.isArrowFunction(parent)) {
-          if (ts.isCatchClause(parent)) {
+        let isSafeWrapper = false;
+        
+        while (current) {
+          if (ts.isCatchClause(current)) {
             isInsideCatch = true;
             break;
           }
-          parent = parent.parent;
+          if (ts.isCallExpression(current)) {
+            const callText = current.expression.getText(sourceFile);
+            if (
+              callText === 'requireStaffPermission' ||
+              callText === 'runSerializableTransaction' ||
+              callText === 'requireOperatorPermission' ||
+              callText.endsWith('.$transaction')
+            ) {
+              isSafeWrapper = true;
+              break;
+            }
+          }
+          current = current.parent;
         }
 
-        if (!isInsideCatch && !filePath.includes('.test.')) {
+        if (!isInsideCatch && !isSafeWrapper && !filePath.includes('.test.')) {
           this.violations.push({
             ruleId: 'server-action-typed-return',
             severity: 'WARNING',

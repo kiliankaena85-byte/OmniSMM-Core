@@ -143,21 +143,13 @@ export async function runCleanup(): Promise<void> {
     log.error('Failed to prune old low-severity SecurityEvent records', { error: err });
   }
 
-  // ── 3.10. Empty Categories Sweep: Remove stale categories with 0 services ───
-  try {
-    const emptyCats = await db.category.findMany({
-      where: { services: { none: {} } },
-      select: { id: true, name: true }
-    });
-    if (emptyCats.length > 0) {
-      const deleteResult = await db.category.deleteMany({
-        where: { id: { in: emptyCats.map(c => c.id) } }
-      });
-      log.info('Empty categories cleanup done', { deleted: deleteResult.count });
-    }
-  } catch (err) {
-    log.error('Failed to cleanup empty categories in maintenance cycle', { error: err });
-  }
+  // ── 3.10. Empty Categories Sweep: PROTECTED AGAINST AUTOMATED BACKGROUND DELETION ───
+  // Inviolable Database Invariant: Automated background workers MUST NEVER delete categories.
+  // Categories can be temporarily empty while administrators (ADMIN / OWNER) configure taxonomy
+  // or before services are imported. Empty category cleanup is strictly an explicit administrative
+  // action via cleanupEmptyCategoriesAction() executed through the Admin Panel.
+  log.debug('Skipping automated category deletion in maintenance worker (Catalog Inviolability Invariant)');
+
 
   // ── 3.11. TelegramErrorLog: resolved errors older than 90 days ─────────────
   try {

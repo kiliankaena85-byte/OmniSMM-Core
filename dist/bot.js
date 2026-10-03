@@ -15749,21 +15749,26 @@ __export2(db_exports, {
   getDatasourceUrl: () => getDatasourceUrl
 });
 function getDatasourceUrl() {
-  if (process.env.CONTOUR === "test" && process.env.DATABASE_URL_TEST) {
-    return process.env.DATABASE_URL_TEST;
-  }
-  if (process.env.CONTOUR === "prod" && process.env.DATABASE_URL_PROD) {
-    return process.env.DATABASE_URL_PROD;
-  }
+  const isTestMode = process.env.CONTOUR === "test" || process.env.NODE_ENV === "test" || process.env.VITEST === "true";
   let url = process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL;
+  if (isTestMode && process.env.DATABASE_URL_TEST) {
+    url = process.env.DATABASE_URL_TEST;
+  } else if (process.env.CONTOUR === "prod" && process.env.DATABASE_URL_PROD) {
+    url = process.env.DATABASE_URL_PROD;
+  }
   if (url && url.startsWith("prisma://")) {
     url = process.env.POSTGRES_URL_NON_POOLING || process.env.DATABASE_URL_UNPOOLED || process.env.DIRECT_URL || url.replace(/^prisma:\/\//, "postgresql://");
+  }
+  if (isTestMode && url && url.includes("/smmplan_lite")) {
+    const testFallback = "postgresql://postgres:postgres@127.0.0.1:5435/smmplan_test?schema=public";
+    console.warn("\u{1F6E1}\uFE0F [DB ISOLATION] Prevented test runner from connecting to production database (smmplan_lite). Redirected to smmplan_test.");
+    url = testFallback;
   }
   if (url) {
     try {
       const parsed = new URL(url);
       if (!parsed.searchParams.has("connection_limit")) {
-        const poolLimit = process.env.APP_ROLE === "worker" ? "5" : process.env.DATABASE_POOL_SIZE || "10";
+        const poolLimit = process.env.APP_ROLE === "worker" ? "5" : process.env.DATABASE_POOL_SIZE || "50";
         parsed.searchParams.set("connection_limit", poolLimit);
       }
       if (!parsed.searchParams.has("pool_timeout")) {
@@ -15803,6 +15808,10 @@ function createPrismaClient() {
     query: {
       service: {
         async deleteMany({ args, query }) {
+          const dsUrl = getDatasourceUrl() || "";
+          if (dsUrl.includes("/smmplan_lite")) {
+            throw new Error("\u{1F6A8} [SAFE-GUARD] Service.deleteMany() is STRICTLY FORBIDDEN on production database (smmplan_lite)!");
+          }
           if (!args?.where || Object.keys(args.where).length === 0) {
             if (process.env.NODE_ENV === "production") {
               throw new Error("\u{1F6A8} [SAFE-GUARD] Unconditional Service.deleteMany() is strictly blocked in production!");
@@ -15817,6 +15826,10 @@ function createPrismaClient() {
       },
       category: {
         async deleteMany({ args, query }) {
+          const dsUrl = getDatasourceUrl() || "";
+          if (dsUrl.includes("/smmplan_lite")) {
+            throw new Error("\u{1F6A8} [SAFE-GUARD] Category.deleteMany() is STRICTLY FORBIDDEN on production database (smmplan_lite)!");
+          }
           if (!args?.where || Object.keys(args.where).length === 0) {
             if (process.env.NODE_ENV === "production") {
               throw new Error("\u{1F6A8} [SAFE-GUARD] Unconditional Category.deleteMany() is strictly blocked in production!");
@@ -15831,6 +15844,10 @@ function createPrismaClient() {
       },
       network: {
         async deleteMany({ args, query }) {
+          const dsUrl = getDatasourceUrl() || "";
+          if (dsUrl.includes("/smmplan_lite")) {
+            throw new Error("\u{1F6A8} [SAFE-GUARD] Network.deleteMany() is STRICTLY FORBIDDEN on production database (smmplan_lite)!");
+          }
           if (!args?.where || Object.keys(args.where).length === 0) {
             if (process.env.NODE_ENV === "production") {
               throw new Error("\u{1F6A8} [SAFE-GUARD] Unconditional Network.deleteMany() is strictly blocked in production!");
@@ -16091,7 +16108,7 @@ async function resolveAuditTenant(explicitTenant) {
     if (storeTenant && storeTenant.trim() !== "") {
       return normalizeTenantId(storeTenant) || "smmplan";
     }
-  } catch {
+  } catch (err) {
   }
   try {
     const { cookies, headers: headers2 } = await Promise.resolve().then(() => __toESM(require_headers3()));
@@ -16101,7 +16118,7 @@ async function resolveAuditTenant(explicitTenant) {
       if (cookieTenant && cookieTenant.trim() !== "") {
         return normalizeTenantId(cookieTenant) || "smmplan";
       }
-    } catch {
+    } catch (err) {
     }
     try {
       const headerStore = await headers2();
@@ -16109,9 +16126,9 @@ async function resolveAuditTenant(explicitTenant) {
       if (headerTenant && headerTenant.trim() !== "") {
         return normalizeTenantId(headerTenant) || "smmplan";
       }
-    } catch {
+    } catch (err) {
     }
-  } catch {
+  } catch (err) {
   }
   return "smmplan";
 }
@@ -16217,14 +16234,29 @@ var wallet_ops_exports = {};
 __export2(wallet_ops_exports, {
   ELEVATED_ADJUSTMENT_CAP_KOPECKS: () => ELEVATED_ADJUSTMENT_CAP_KOPECKS,
   ExactMath: () => ExactMath,
+  IdempotencyKeyReuseError: () => IdempotencyKeyReuseError,
   ImmutableLedgerError: () => ImmutableLedgerError,
   MAX_ADJUSTMENT_CAP_KOPECKS: () => MAX_ADJUSTMENT_CAP_KOPECKS,
+  QUARANTINE_HARD_CEILING_KOPECKS: () => QUARANTINE_HARD_CEILING_KOPECKS,
   WalletInsufficientFundsError: () => WalletInsufficientFundsError,
   WalletInvalidAmountError: () => WalletInvalidAmountError,
   WalletOps: () => WalletOps,
   WalletUserNotFoundError: () => WalletUserNotFoundError,
   adjustBalance: () => adjustBalance
 });
+function assertSameIdempotentPayload(existing, userId, signedAmount, key) {
+  if (existing.userId !== userId || existing.amount !== signedAmount) {
+    throw new IdempotencyKeyReuseError(key);
+  }
+}
+function assertSameIdempotentOwner(existing, userId, signedAmount, key) {
+  if (existing.userId !== userId) {
+    throw new IdempotencyKeyReuseError(key);
+  }
+  if (existing.amount !== signedAmount) {
+    console.warn(`[WalletOps] Idempotent replay amount drift for key ${key}: ledger=${existing.amount} requested=${signedAmount}`);
+  }
+}
 async function adjustBalance(userId, amountCents, context) {
   const user = await db.user.findFirst({
     where: {
@@ -16266,7 +16298,7 @@ async function adjustBalance(userId, amountCents, context) {
   }
   return result;
 }
-var WalletInsufficientFundsError, WalletUserNotFoundError, WalletInvalidAmountError, ImmutableLedgerError, MAX_ADJUSTMENT_CAP_KOPECKS, ELEVATED_ADJUSTMENT_CAP_KOPECKS, WalletOps;
+var WalletInsufficientFundsError, WalletUserNotFoundError, WalletInvalidAmountError, ImmutableLedgerError, IdempotencyKeyReuseError, MAX_ADJUSTMENT_CAP_KOPECKS, ELEVATED_ADJUSTMENT_CAP_KOPECKS, QUARANTINE_HARD_CEILING_KOPECKS, WalletOps;
 var init_wallet_ops = __esm({
   "src/services/financial/wallet-ops.ts"() {
     "use strict";
@@ -16301,8 +16333,16 @@ var init_wallet_ops = __esm({
         this.name = "ImmutableLedgerError";
       }
     };
+    IdempotencyKeyReuseError = class extends Error {
+      code = "IDEMPOTENCY_KEY_REUSE";
+      constructor(key) {
+        super(`Idempotency key reused with a different payload: ${key}`);
+        this.name = "IdempotencyKeyReuseError";
+      }
+    };
     MAX_ADJUSTMENT_CAP_KOPECKS = BigInt(1e7);
     ELEVATED_ADJUSTMENT_CAP_KOPECKS = BigInt(1e9);
+    QUARANTINE_HARD_CEILING_KOPECKS = BigInt(1e11);
     WalletOps = {
       /**
        * Safe charge mechanism without creating a new transaction.
@@ -16326,17 +16366,18 @@ var init_wallet_ops = __esm({
         if (tenantId && user.tenantId !== tenantId) {
           throw new WalletUserNotFoundError(userId);
         }
-        if (user.balance < rawCents) {
-          throw new WalletInsufficientFundsError(rawCents, user.balance);
-        }
         const resolvedTenantId = tenantId || user.tenantId || "smmplan";
         if (idempotencyKey) {
           const existing = await tx.ledgerEntry.findFirst({
             where: { idempotencyKey, tenantId: resolvedTenantId }
           });
           if (existing) {
+            assertSameIdempotentPayload(existing, userId, -rawCents, idempotencyKey);
             return { success: true, balance: user.balance, cached: true, entry: existing };
           }
+        }
+        if (user.balance < rawCents) {
+          throw new WalletInsufficientFundsError(rawCents, user.balance);
         }
         try {
           const entry = await tx.ledgerEntry.create({
@@ -16380,6 +16421,7 @@ var init_wallet_ops = __esm({
               where: { idempotencyKey, tenantId: resolvedTenantId }
             });
             if (existing) {
+              assertSameIdempotentPayload(existing, userId, -rawCents, idempotencyKey);
               const userCurrent = await tx.user.findUnique({ where: { id: userId }, select: { balance: true } });
               return { success: true, balance: userCurrent?.balance ?? null, cached: true, entry: existing };
             }
@@ -16414,6 +16456,7 @@ var init_wallet_ops = __esm({
             where: { idempotencyKey, tenantId: resolvedTenantId }
           });
           if (existing) {
+            assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
             return { success: true, balance: null, cached: true, entry: existing };
           }
         }
@@ -16443,6 +16486,7 @@ var init_wallet_ops = __esm({
               where: { idempotencyKey, tenantId: resolvedTenantId }
             });
             if (existing) {
+              assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
               const updatedUser = await tx.user.findUnique({ where: { id: userId }, select: { balance: true } });
               return { success: true, balance: updatedUser?.balance ?? null, cached: true, entry: existing };
             }
@@ -16481,6 +16525,11 @@ var init_wallet_ops = __esm({
             where: { idempotencyKey, tenantId: resolvedTenantId }
           });
           if (existing) {
+            if (rawCents < BigInt(0)) {
+              assertSameIdempotentPayload(existing, userId, rawCents, idempotencyKey);
+            } else {
+              assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
+            }
             return { success: true, balance: null, cached: true, entry: existing };
           }
         }
@@ -16551,11 +16600,12 @@ var init_wallet_ops = __esm({
             where: { idempotencyKey, tenantId: resolvedTenantId }
           });
           if (existing) {
+            assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
             return { success: true, balance: null, cached: true, entry: existing };
           }
         }
         const currentTotalSpent = existingUser.totalSpent ?? BigInt(0);
-        const newTotalSpent = currentTotalSpent > rawCents ? currentTotalSpent - rawCents : BigInt(0);
+        const safeDecrement = currentTotalSpent > rawCents ? rawCents : currentTotalSpent;
         const entry = await tx.ledgerEntry.create({
           data: {
             userId,
@@ -16573,7 +16623,7 @@ var init_wallet_ops = __esm({
           where: { id: userId },
           data: {
             balance: { increment: rawCents },
-            totalSpent: newTotalSpent
+            totalSpent: { decrement: safeDecrement }
           },
           select: { balance: true, totalSpent: true }
         });
@@ -16587,6 +16637,9 @@ var init_wallet_ops = __esm({
         const { idempotencyKey, adminId, tenantId } = opts || {};
         const rawCents = typeof amountCents === "bigint" ? amountCents : BigInt(amountCents);
         const absAmount = rawCents < BigInt(0) ? -rawCents : rawCents;
+        if (absAmount === BigInt(0) || absAmount > QUARANTINE_HARD_CEILING_KOPECKS) {
+          throw new WalletInvalidAmountError("Adjustment");
+        }
         const user = await tx.user.findUnique({
           where: { id: userId },
           select: { id: true, tenantId: true }
@@ -16634,16 +16687,28 @@ var init_wallet_ops = __esm({
        */
       async quarantineApprove(tx, userId, amountCents, opts) {
         const rawCents = typeof amountCents === "bigint" ? amountCents : BigInt(amountCents);
+        if (rawCents === BigInt(0)) {
+          throw new WalletInvalidAmountError("Adjustment");
+        }
         const { tenantId } = opts || {};
+        const absCents = rawCents < BigInt(0) ? -rawCents : rawCents;
         const updatedUserBatch = await tx.user.updateMany({
           where: {
             id: userId,
+            ...rawCents < BigInt(0) ? { balance: { gte: absCents } } : {},
             ...tenantId ? { tenantId } : {}
           },
           data: { balance: { increment: rawCents } }
         });
         if (updatedUserBatch.count === 0) {
-          throw new WalletUserNotFoundError(userId);
+          const checkUser = await tx.user.findUnique({
+            where: { id: userId },
+            select: { id: true, balance: true }
+          });
+          if (!checkUser || rawCents > BigInt(0)) {
+            throw new WalletUserNotFoundError(userId);
+          }
+          throw new WalletInsufficientFundsError(absCents, checkUser.balance);
         }
         const updatedUser = await tx.user.findUniqueOrThrow({
           where: { id: userId },
@@ -16713,7 +16778,7 @@ var init_wallet_ops = __esm({
         });
         await tx.user.update({
           where: { id: userId },
-          data: { referralBalance: { increment: Number(rawCents) } }
+          data: { referralBalance: { increment: rawCents } }
         });
         return { success: true, entry, cached: false };
       },
@@ -16726,10 +16791,10 @@ var init_wallet_ops = __esm({
         if (rawCents <= BigInt(0)) {
           throw new WalletInvalidAmountError("Debit");
         }
-        const { idempotencyKey, adminId, tenantId, transactionType } = opts || {};
+        const { idempotencyKey, adminId, tenantId, transactionType, allowDebt } = opts || {};
         const user = await tx.user.findUnique({
           where: { id: userId },
-          select: { id: true, tenantId: true, referralBalance: true, balance: true }
+          select: { id: true, tenantId: true, referralBalance: true }
         });
         if (!user || tenantId && user.tenantId !== tenantId) {
           throw new WalletUserNotFoundError(userId);
@@ -16739,7 +16804,14 @@ var init_wallet_ops = __esm({
           const existing = await tx.ledgerEntry.findFirst({
             where: { idempotencyKey, tenantId: resolvedTenantId }
           });
-          if (existing) return { success: true, entry: existing, cached: true };
+          if (existing) {
+            assertSameIdempotentPayload(existing, userId, -rawCents, idempotencyKey);
+            return { success: true, entry: existing, cached: true };
+          }
+        }
+        const currentRefBalance = user.referralBalance ?? BigInt(0);
+        if (!allowDebt && currentRefBalance < rawCents) {
+          throw new WalletInsufficientFundsError(rawCents, currentRefBalance);
         }
         const entry = await tx.ledgerEntry.create({
           data: {
@@ -16753,34 +16825,20 @@ var init_wallet_ops = __esm({
             adminId
           }
         });
-        const currentRefBalance = user.referralBalance ?? 0;
-        const reqAmountNumber = Number(rawCents);
-        const debitFromReferral = Math.min(Math.max(0, currentRefBalance), reqAmountNumber);
-        const shortage = reqAmountNumber - debitFromReferral;
-        if (debitFromReferral > 0) {
-          await tx.user.updateMany({
-            where: {
-              id: userId,
-              referralBalance: { gte: debitFromReferral },
-              ...tenantId ? { tenantId } : {}
-            },
-            data: { referralBalance: { decrement: debitFromReferral } }
-          });
+        const updated = await tx.user.updateMany({
+          where: {
+            id: userId,
+            ...allowDebt ? {} : { referralBalance: { gte: rawCents } },
+            ...tenantId ? { tenantId } : {}
+          },
+          data: { referralBalance: { decrement: rawCents } }
+        });
+        if (updated.count !== 1) {
+          if (allowDebt) throw new WalletUserNotFoundError(userId);
+          throw new WalletInsufficientFundsError(rawCents, currentRefBalance);
         }
-        if (shortage > 0) {
-          const availableMain = user.balance > BigInt(0) ? user.balance : BigInt(0);
-          const debitFromMain = BigInt(shortage) > availableMain ? availableMain : BigInt(shortage);
-          if (debitFromMain > BigInt(0)) {
-            await tx.user.updateMany({
-              where: {
-                id: userId,
-                balance: { gte: debitFromMain },
-                ...tenantId ? { tenantId } : {}
-              },
-              data: { balance: { decrement: debitFromMain } }
-            });
-          }
-          console.warn(`[WalletOps.referralDebit] User ${userId}: insufficient referralBalance (${currentRefBalance} < ${reqAmountNumber}). Debited ${debitFromReferral} from referral, ${debitFromMain} from main balance.`);
+        if (allowDebt && currentRefBalance < rawCents) {
+          console.warn(`[WalletOps.referralDebit] User ${userId}: clawback ${rawCents} exceeds referralBalance ${currentRefBalance}; referral debt ${rawCents - currentRefBalance} recorded.`);
         }
         return { success: true, entry, cached: false };
       }
@@ -35750,7 +35808,7 @@ function calculateRedisRetryDelay(times, env = process.env.NODE_ENV || "developm
   }
   return Math.min(times * 100, 3e3);
 }
-var import_ioredis, globalForRedis, redisUrl, redisCheck, redis;
+var import_ioredis, globalForRedis, redisUrl, isBuildTime, redisCheck, redis;
 var init_redis = __esm({
   "src/lib/redis.ts"() {
     "use strict";
@@ -35758,11 +35816,15 @@ var init_redis = __esm({
     init_sensitive_data_filter();
     globalForRedis = global;
     redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+    isBuildTime = process.env.NEXT_PHASE === "phase-production-build" || process.env.npm_lifecycle_event === "build" || process.env.IS_NEXT_BUILD === "true" || process.env.NEXT_RUNTIME === "edge";
     redisCheck = validateRedisUrl(redisUrl, process.env.NODE_ENV, process.env.REDIS_PASSWORD);
     if (!redisCheck.valid) {
-      throw new Error(redisCheck.error);
-    }
-    if (redisCheck.warning) {
+      if (isBuildTime) {
+        console.warn("[REDIS] Build-time SEC-001 notice (skipped during compilation):", redisCheck.error);
+      } else {
+        throw new Error(redisCheck.error);
+      }
+    } else if (redisCheck.warning) {
       console.warn(redisCheck.warning);
     }
     redis = globalForRedis.redis || new import_ioredis.Redis(redisUrl, {
@@ -35792,7 +35854,7 @@ __export2(settings_exports, {
   SettingsProvider: () => SettingsProvider,
   getTenantFallbackBranding: () => getTenantFallbackBranding
 });
-var import_cache, localSettingsCache, CACHE_TTL_MS, SettingsProvider, SettingsManager;
+var import_cache, localSettingsCache, tenantRecordIdCache, SETTINGS_L1_TTL_MS, CACHE_TTL_MS, SettingsProvider, SettingsManager;
 var init_settings = __esm({
   "src/lib/settings.ts"() {
     "use strict";
@@ -35802,6 +35864,8 @@ var init_settings = __esm({
     import_cache = __toESM(require_cache());
     init_tenant_resolver_edge();
     localSettingsCache = {};
+    tenantRecordIdCache = /* @__PURE__ */ new Map();
+    SETTINGS_L1_TTL_MS = 20 * 1e3;
     CACHE_TTL_MS = 60 * 1e3;
     SettingsProvider = class _SettingsProvider {
       static isTestEnvironment() {
@@ -35814,15 +35878,7 @@ var init_settings = __esm({
        * Clears the in-memory fallback cache for workers/CLI.
        */
       static invalidateLocalCache(tenantId) {
-        if (tenantId) {
-          const cleanSlug = normalizeTenantId(tenantId) || "smmplan";
-          delete localSettingsCache[cleanSlug];
-          delete localSettingsCache[tenantId];
-        } else {
-          for (const k of Object.keys(localSettingsCache)) {
-            delete localSettingsCache[k];
-          }
-        }
+        _SettingsProvider.clearMemoryCache(tenantId);
       }
       /**
        * Resolves the current tenantId from request headers or fallback environment variables.
@@ -35897,9 +35953,16 @@ var init_settings = __esm({
        */
       static async resolveTenantRecordId(tenantSlug) {
         const slug = normalizeTenantId(tenantSlug) || "smmplan";
+        if (!_SettingsProvider.isTestEnvironment()) {
+          const cached = tenantRecordIdCache.get(slug);
+          if (cached) return cached;
+        }
         const tenant = await db.tenant.findUnique({ where: { slug } }) || await db.tenant.findFirst({ where: { slug: "smmplan" } }) || await db.tenant.findFirst();
-        if (tenant) return tenant.id;
-        return slug;
+        const resolved = tenant ? tenant.id : slug;
+        if (!_SettingsProvider.isTestEnvironment()) {
+          tenantRecordIdCache.set(slug, resolved);
+        }
+        return resolved;
       }
       /**
        * Safe wrapper around getCached that self-heals when Next.js incrementalCache is missing (CLI/workers)
@@ -35907,10 +35970,18 @@ var init_settings = __esm({
       static async get(tenantId) {
         const rawId = tenantId || await this.getTenantId();
         const normalizedSlug = normalizeTenantId(rawId) || "smmplan";
+        if (!_SettingsProvider.isTestEnvironment()) {
+          const now = Date.now();
+          const cached = localSettingsCache[normalizedSlug] || (rawId ? localSettingsCache[rawId] : void 0);
+          if (cached && cached.expiresAt > now) {
+            return cached.data;
+          }
+        }
         const targetTenantId = await this.resolveTenantRecordId(normalizedSlug);
         try {
           if (_SettingsProvider.isTestEnvironment()) {
             delete localSettingsCache[targetTenantId];
+            delete localSettingsCache[normalizedSlug];
             const fresh = await db.systemSettings.findUnique({ where: { id: targetTenantId } });
             if (fresh) return fresh;
             return await db.systemSettings.upsert({
@@ -35920,7 +35991,13 @@ var init_settings = __esm({
             });
           }
           try {
-            return await this.getCached(normalizedSlug);
+            const settings = await this.getCached(normalizedSlug);
+            if (settings && !_SettingsProvider.isTestEnvironment()) {
+              const expiresAt = Date.now() + SETTINGS_L1_TTL_MS;
+              localSettingsCache[normalizedSlug] = { data: settings, expiresAt };
+              localSettingsCache[targetTenantId] = { data: settings, expiresAt };
+            }
+            return settings;
           } catch (err) {
             const errMessage = err instanceof Error ? err.message : String(err);
             if (errMessage.includes("incrementalCache") || errMessage.includes("Invariant")) {
@@ -35937,7 +36014,8 @@ var init_settings = __esm({
                   create: { id: targetTenantId, taxRate: 6, opexMonthly: 0, maintenanceMode: false, isTestMode: _SettingsProvider.isTestEnvironment(), siteName: getTenantFallbackBranding(normalizedSlug).name, exchangeRateUSD: 95 }
                 });
               }
-              localSettingsCache[targetTenantId] = { data: settings, expiresAt: now + CACHE_TTL_MS };
+              localSettingsCache[targetTenantId] = { data: settings, expiresAt: now + SETTINGS_L1_TTL_MS };
+              localSettingsCache[normalizedSlug] = { data: settings, expiresAt: now + SETTINGS_L1_TTL_MS };
               return settings;
             }
             throw err;
@@ -36106,8 +36184,8 @@ var init_settings = __esm({
           SITE_DESCRIPTION: settings.siteDescription || "",
           SUPPORT_EMAIL: settings.contactSupportEmail || `support@${defaultDomain}`,
           PRIVACY_EMAIL: settings.contactPrivacyEmail || `privacy@${defaultDomain}`,
-          TELEGRAM_SUPPORT_BOT: settings.contactTelegramBot || branding.bot,
-          TELEGRAM_SUPPORT_CHANNEL: settings.contactTelegramChannel || branding.channel,
+          TELEGRAM_SUPPORT_BOT: settings.contactTelegramBot === null || settings.contactTelegramBot === "" ? "" : settings.contactTelegramBot ?? branding.bot,
+          TELEGRAM_SUPPORT_CHANNEL: settings.contactTelegramChannel === null || settings.contactTelegramChannel === "" ? "" : settings.contactTelegramChannel ?? branding.channel,
           WHATSAPP: settings.contactWhatsApp || "",
           VK: settings.contactVk || "",
           COMPANY_NAME: settings.legalCompanyName || defaultSiteName,
@@ -36171,7 +36249,7 @@ var init_settings = __esm({
       }
       static async setExchangeRateUSD(rate, tenantId) {
         const activeTenantId = tenantId || await this.getTenantId();
-        delete localSettingsCache[activeTenantId];
+        _SettingsProvider.clearMemoryCache(activeTenantId);
         await db.systemSettings.upsert({
           where: { id: activeTenantId },
           update: { exchangeRateUSD: rate, exchangeRateUpdatedAt: /* @__PURE__ */ new Date() },
@@ -36194,10 +36272,20 @@ var init_settings = __esm({
       }
       static clearMemoryCache(tenantId) {
         if (tenantId) {
+          const cleanSlug = normalizeTenantId(tenantId) || tenantId;
           delete localSettingsCache[tenantId];
+          delete localSettingsCache[cleanSlug];
+          tenantRecordIdCache.delete(tenantId);
+          tenantRecordIdCache.delete(cleanSlug);
+        } else {
+          for (const k of Object.keys(localSettingsCache)) {
+            delete localSettingsCache[k];
+          }
+          tenantRecordIdCache.clear();
         }
         delete localSettingsCache["smmplan"];
         delete localSettingsCache["flux"];
+        delete localSettingsCache["smmflux"];
       }
       static async setMaintenanceMode(enable, tenantId) {
         const activeTenantId = tenantId || await this.getTenantId();
@@ -36239,7 +36327,7 @@ var init_settings = __esm({
       }
       static async setRefillModuleEnabled(enable, tenantId) {
         const activeTenantId = tenantId || await this.getTenantId();
-        delete localSettingsCache[activeTenantId];
+        _SettingsProvider.clearMemoryCache(activeTenantId);
         const { redis: redis2 } = await Promise.resolve().then(() => (init_redis(), redis_exports));
         await redis2.set(`settings:${activeTenantId}:isRefillModuleEnabled`, String(enable));
         try {
@@ -36271,9 +36359,7 @@ var init_settings = __esm({
       static async setEnvironmentMode(mode, tenantId) {
         const activeTenantId = tenantId || await this.getTenantId();
         const isTest = mode !== "PRODUCTION";
-        delete localSettingsCache[activeTenantId];
-        delete localSettingsCache["smmplan"];
-        delete localSettingsCache["flux"];
+        _SettingsProvider.clearMemoryCache(activeTenantId);
         await db.systemSettings.upsert({
           where: { id: activeTenantId },
           update: { isTestMode: isTest, environmentMode: mode },
@@ -74562,7 +74648,7 @@ var init_loyalty_service = __esm({
               comm.referrerId,
               commAmount,
               `\u041E\u0442\u0437\u044B\u0432 \u0440\u0435\u0444\u0435\u0440\u0430\u043B\u044C\u043D\u043E\u0439 \u043A\u043E\u043C\u0438\u0441\u0441\u0438\u0438 \u0437\u0430 \u043E\u0442\u043C\u0435\u043D\u0443 \u0437\u0430\u043A\u0430\u0437\u0430 ${orderId}`,
-              { tenantId, idempotencyKey: `ref_reversal_${comm.id}`, transactionType: "REFERRAL_REVERSAL" }
+              { tenantId, idempotencyKey: `ref_reversal_${comm.id}`, transactionType: "REFERRAL_REVERSAL", allowDebt: true }
             );
           }
           await tx.auditLog.create({
@@ -102670,9 +102756,9 @@ var require_util4 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/common.js
+// node_modules/ip-address/dist/common.js
 var require_common2 = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/common.js"(exports2) {
+  "node_modules/ip-address/dist/common.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.isCorrect = exports2.isInSubnet = void 0;
@@ -102701,9 +102787,9 @@ var require_common2 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/v4/constants.js
+// node_modules/ip-address/dist/v4/constants.js
 var require_constants7 = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/v4/constants.js"(exports2) {
+  "node_modules/ip-address/dist/v4/constants.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.RE_SUBNET_STRING = exports2.RE_ADDRESS = exports2.GROUPS = exports2.BITS = void 0;
@@ -102714,9 +102800,9 @@ var require_constants7 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/address-error.js
+// node_modules/ip-address/dist/address-error.js
 var require_address_error = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/address-error.js"(exports2) {
+  "node_modules/ip-address/dist/address-error.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.AddressError = void 0;
@@ -104004,9 +104090,9 @@ var require_jsbn = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/sprintf-js/src/sprintf.js
+// node_modules/ip-address/node_modules/sprintf-js/src/sprintf.js
 var require_sprintf = __commonJS({
-  "node_modules/socks/node_modules/sprintf-js/src/sprintf.js"(exports2) {
+  "node_modules/ip-address/node_modules/sprintf-js/src/sprintf.js"(exports2) {
     !(function() {
       "use strict";
       var re = {
@@ -104207,9 +104293,9 @@ var require_sprintf = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/ipv4.js
+// node_modules/ip-address/dist/ipv4.js
 var require_ipv4 = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/ipv4.js"(exports2) {
+  "node_modules/ip-address/dist/ipv4.js"(exports2) {
     "use strict";
     var __createBinding = exports2 && exports2.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -104521,9 +104607,9 @@ var require_ipv4 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/v6/constants.js
+// node_modules/ip-address/dist/v6/constants.js
 var require_constants8 = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/v6/constants.js"(exports2) {
+  "node_modules/ip-address/dist/v6/constants.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.RE_URL_WITH_PORT = exports2.RE_URL = exports2.RE_ZONE_STRING = exports2.RE_SUBNET_STRING = exports2.RE_BAD_ADDRESS = exports2.RE_BAD_CHARACTERS = exports2.TYPES = exports2.SCOPES = exports2.GROUPS = exports2.BITS = void 0;
@@ -104572,9 +104658,9 @@ var require_constants8 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/v6/helpers.js
+// node_modules/ip-address/dist/v6/helpers.js
 var require_helpers2 = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/v6/helpers.js"(exports2) {
+  "node_modules/ip-address/dist/v6/helpers.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.simpleGroup = exports2.spanLeadingZeroes = exports2.spanAll = exports2.spanAllZeroes = void 0;
@@ -104612,9 +104698,9 @@ var require_helpers2 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/v6/regular-expressions.js
+// node_modules/ip-address/dist/v6/regular-expressions.js
 var require_regular_expressions = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/v6/regular-expressions.js"(exports2) {
+  "node_modules/ip-address/dist/v6/regular-expressions.js"(exports2) {
     "use strict";
     var __createBinding = exports2 && exports2.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -104705,9 +104791,9 @@ var require_regular_expressions = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/ipv6.js
+// node_modules/ip-address/dist/ipv6.js
 var require_ipv6 = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/ipv6.js"(exports2) {
+  "node_modules/ip-address/dist/ipv6.js"(exports2) {
     "use strict";
     var __createBinding = exports2 && exports2.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -105615,9 +105701,9 @@ var require_ipv6 = __commonJS({
   }
 });
 
-// node_modules/socks/node_modules/ip-address/dist/ip-address.js
+// node_modules/ip-address/dist/ip-address.js
 var require_ip_address = __commonJS({
-  "node_modules/socks/node_modules/ip-address/dist/ip-address.js"(exports2) {
+  "node_modules/ip-address/dist/ip-address.js"(exports2) {
     "use strict";
     var __createBinding = exports2 && exports2.__createBinding || (Object.create ? (function(o, m, k, k2) {
       if (k2 === void 0) k2 = k;
@@ -132967,6 +133053,10 @@ var init_notifications = __esm({
 });
 
 // src/services/core/order.service.ts
+var order_service_exports = {};
+__export2(order_service_exports, {
+  orderService: () => orderService
+});
 var import_client2, OrderService, orderService;
 var init_order_service = __esm({
   "src/services/core/order.service.ts"() {
@@ -135871,6 +135961,14 @@ var init_unified_payment_service = __esm({
               gateway
             }
           });
+          if (metadata && typeof metadata === "object") {
+            try {
+              const { redis: redis2 } = await Promise.resolve().then(() => (init_redis(), redis_exports));
+              await redis2.set(`payment:metadata:${payment.id}`, JSON.stringify(metadata), "EX", 86400);
+            } catch (err) {
+              console.warn("[UnifiedPayment] Failed to persist payment metadata to redis:", err);
+            }
+          }
           const { SettingsProvider: SettingsProvider2 } = await Promise.resolve().then(() => (init_settings(), settings_exports));
           const supportDomain = await SettingsProvider2.getSupportEmailDomain(resolvedTenantId);
           let successUrl = `${getCanonicalTenantBaseUrl(resolvedTenantId)}/dashboard`;
@@ -135970,6 +136068,19 @@ var init_utils = __esm({
   "src/lib/utils.ts"() {
     "use strict";
     init_clsx();
+  }
+});
+
+// src/services/orders/drip-feed-floor.ts
+function getDripFeedFloorViolation(quantity, splits, minQty, mode = "runs") {
+  if (!splits || splits <= 0) return null;
+  const perRun = Math.floor(quantity / splits);
+  if (perRun >= minQty) return null;
+  return mode === "smart" ? `\u0414\u043B\u044F \u0423\u043C\u043D\u043E\u0433\u043E Drip-feed \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043D\u0430 1 \u0434\u0435\u043D\u044C (${perRun}) \u043D\u0435 \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043C\u0435\u043D\u044C\u0448\u0435 \u043C\u0438\u043D\u0438\u043C\u0430\u043B\u044C\u043D\u043E\u0433\u043E (${minQty})` : `\u0414\u043B\u044F Drip-feed \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043D\u0430 \u043E\u0434\u0438\u043D \u0437\u0430\u043F\u0443\u0441\u043A (${perRun}) \u043D\u0435 \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043C\u0435\u043D\u044C\u0448\u0435 \u043C\u0438\u043D\u0438\u043C\u0430\u043B\u044C\u043D\u043E\u0433\u043E (${minQty})`;
+}
+var init_drip_feed_floor = __esm({
+  "src/services/orders/drip-feed-floor.ts"() {
+    "use strict";
   }
 });
 
@@ -136448,7 +136559,7 @@ var init_referral_wizard = __esm({
           const tenantHost = getTenantHost(botTenantId2);
           const host = process.env.APP_URL || (tenantHost.startsWith("http") ? tenantHost : `https://${tenantHost}`);
           const link = `${host}/?ref=${user.referralCode}`;
-          const earned = (user.referralBalance ?? 0) / 100;
+          const earned = Number(user.referralBalance ?? BigInt(0)) / 100;
           const refsCount = user._count?.referrals ?? 0;
           await ctx.reply(
             `\u{1F465} <b>\u0420\u0435\u0444\u0435\u0440\u0430\u043B\u044C\u043D\u0430\u044F \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0430</b>
@@ -141073,15 +141184,22 @@ var init_zod = __esm({
 });
 
 // src/services/link-engine/link-rules-registry.ts
-function getUnifiedLinkValidator(platform, targetType) {
+function getUnifiedLinkValidator(platform, targetType, options) {
   const normPlatform = (platform || "").toUpperCase();
   const normTarget = (targetType || "").toUpperCase();
+  const isPrivate = options?.isPrivate === true || normTarget === "PRIVATE_POST";
   switch (normPlatform) {
     case "TELEGRAM":
       if (normTarget === "CHANNEL" || normTarget === "CHANNEL_POSTS" || normTarget === "PROFILE") {
         return external_exports.string().regex(UNIFIED_REGEX.TELEGRAM.CHANNEL, "\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u043A\u0430\u043D\u0430\u043B \u0438\u043B\u0438 \u0447\u0430\u0442 Telegram (\u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440, https://t.me/durov)");
       }
-      if (normTarget === "POST") {
+      if (normTarget === "POST" || normTarget === "PRIVATE_POST") {
+        if (isPrivate) {
+          return external_exports.string().regex(
+            UNIFIED_REGEX.TELEGRAM.PRIVATE_POST,
+            "\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u043F\u043E\u0441\u0442 Telegram (\u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440, https://t.me/durov/123 \u0438\u043B\u0438 https://t.me/c/1234567890/123)"
+          );
+        }
         return external_exports.string().refine((val) => !val.includes("/c/"), "\u041D\u0435\u0432\u043E\u0437\u043C\u043E\u0436\u043D\u043E \u0437\u0430\u043A\u0430\u0437\u0430\u0442\u044C \u0443\u0441\u043B\u0443\u0433\u0443 \u0432 \u0437\u0430\u043A\u0440\u044B\u0442\u044B\u0439 \u0447\u0430\u0442 (\u0441\u0441\u044B\u043B\u043A\u0430 \u0441\u043E\u0434\u0435\u0440\u0436\u0438\u0442 /c/). \u0421\u0434\u0435\u043B\u0430\u0439\u0442\u0435 \u043A\u0430\u043D\u0430\u043B \u043F\u0443\u0431\u043B\u0438\u0447\u043D\u044B\u043C.").and(external_exports.string().regex(UNIFIED_REGEX.TELEGRAM.POST, "\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u044B\u0439 \u043F\u043E\u0441\u0442 (\u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440, https://t.me/durov/123)"));
       }
       if (normTarget === "STORY") {
@@ -141249,6 +141367,8 @@ var init_link_rules_registry = __esm({
         CHANNEL: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/(?:joinchat\/|\+|s\/|boost\/)?(?:c\/\d+|@?[\w-]+)(?:\/boost)?\/?(?:\?.*)?$/i,
         // Allows posts: t.me/channel/123, topic posts: t.me/group/100/250, web previews: t.me/s/channel/123
         POST: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/(?:s\/)?[\w-]+\/(?:topic\/)?\d+(?:\/\d+)?\/?(?:\?.*)?$/i,
+        // Allows posts in private channels (t.me/c/1234567890/123) as well as public channels
+        PRIVATE_POST: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/(?:c\/\d+\/(?:topic\/)?\d+(?:\/\d+)?|(?:s\/)?[\w-]+\/(?:topic\/)?\d+(?:\/\d+)?)\/?(?:\?.*)?$/i,
         // Allows stories: t.me/channel/s/123
         STORY: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/[\w-]+\/s\/\d+\/?$/i,
         // Allows comments: t.me/channel/123?comment=456
@@ -141635,7 +141755,8 @@ var init_unified_link_engine = __esm({
             errorCode: "INCOMPATIBLE_TARGET_TYPE"
           };
         }
-        const schemaValidator = getUnifiedLinkValidator(analysis.platform, resolvedTargetType);
+        const isPrivate = service.isPrivate === true || service.targetType === "PRIVATE_POST" || resolvedTargetTypeStr === "PRIVATE_POST";
+        const schemaValidator = getUnifiedLinkValidator(analysis.platform, resolvedTargetType, { isPrivate });
         const parsed = schemaValidator.safeParse(canonicalLink);
         if (!parsed.success) {
           return {
@@ -141742,6 +141863,13 @@ ${reqText}
     return ctx.wizard.selectStep(7);
   }
   const totalQuantity = isDripFeed && runs > 1 ? qty * runs : qty;
+  if (isDripFeed && runs > 1) {
+    const dripViolation = getDripFeedFloorViolation(totalQuantity, runs, service.minQty, "runs");
+    if (dripViolation) {
+      await ctx.reply(`\u274C <b>\u041E\u0448\u0438\u0431\u043A\u0430 Drip-Feed:</b> ${dripViolation}. \u041F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u043F\u043E\u0432\u0442\u043E\u0440\u0438\u0442\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0443.`, { parse_mode: "HTML" });
+      return ctx.scene.leave();
+    }
+  }
   const pricing = await marketingService.calculatePrice(user.id, service.id, totalQuantity);
   if (pricing.totalCents <= 0) {
     await ctx.reply("\u274C <b>\u041E\u0448\u0438\u0431\u043A\u0430:</b> \u0423\u0441\u043B\u0443\u0433\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0434\u043B\u044F \u0437\u0430\u043A\u0430\u0437\u0430 (\u043D\u0435\u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u0430\u044F \u0446\u0435\u043D\u0430). \u041E\u0431\u0440\u0430\u0442\u0438\u0442\u0435\u0441\u044C \u0432 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0443.", { parse_mode: "HTML" });
@@ -141802,6 +141930,7 @@ var init_order_wizard = __esm({
     init_unified_payment_service();
     init_formatter();
     init_utils();
+    init_drip_feed_floor();
     init_menu_navigation();
     ORDER_WIZARD = "order-wizard";
     botTenantId3 = process.env.BOT_TENANT_ID || "smmplan";
@@ -141994,6 +142123,37 @@ ${escapeHtml2(validationErrorMsg)}
           return ctx.reply("\u274C \u0427\u0438\u0441\u043B\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u0432 \u0434\u043E\u043B\u0436\u043D\u043E \u0431\u044B\u0442\u044C \u043E\u0442 2 \u0434\u043E 100. \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0447\u0438\u0441\u043B\u043E:");
         }
         const orderData = getOrderData(ctx);
+        const service = orderData.service;
+        if (!service) return ctx.scene.leave();
+        const totalQuantity = orderData.isDripFeed && runs > 1 ? (orderData.qty || 0) * runs : orderData.qty || 0;
+        const dripViolation = getDripFeedFloorViolation(totalQuantity, runs, service.minQty, "runs");
+        if (dripViolation) {
+          return ctx.reply(
+            `\u26A0\uFE0F <b>\u041D\u0435\u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u0430\u044F \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430 Drip-Feed:</b>
+
+${dripViolation}.
+
+\u041C\u0438\u043D\u0438\u043C\u0430\u043B\u044C\u043D\u043E\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u0437\u0430 1 \u0437\u0430\u043F\u0443\u0441\u043A \u0434\u043B\u044F \u044D\u0442\u043E\u0439 \u0443\u0441\u043B\u0443\u0433\u0438: <b>${service.minQty.toLocaleString()}</b> \u0448\u0442.
+\u041F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u0432\u0432\u0435\u0434\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u043E\u0435 \u0447\u0438\u0441\u043B\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u0432:`,
+            {
+              parse_mode: "HTML",
+              ...import_telegraf3.Markup.inlineKeyboard([[import_telegraf3.Markup.button.callback("\u274C \u041E\u0442\u043C\u0435\u043D\u0430", "cancel_wizard")]])
+            }
+          );
+        }
+        if (totalQuantity > service.maxQty) {
+          return ctx.reply(
+            `\u26A0\uFE0F <b>\u041F\u0440\u0435\u0432\u044B\u0448\u0435\u043D \u043C\u0430\u043A\u0441\u0438\u043C\u0443\u043C \u0443\u0441\u043B\u0443\u0433\u0438:</b>
+
+\u0421\u0443\u043C\u043C\u0430\u0440\u043D\u043E\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E (${totalQuantity.toLocaleString()} \u0448\u0442.) \u043F\u0440\u0435\u0432\u044B\u0448\u0430\u0435\u0442 \u043C\u0430\u043A\u0441\u0438\u043C\u0430\u043B\u044C\u043D\u044B\u0439 \u043B\u0438\u043C\u0438\u0442 \u0443\u0441\u043B\u0443\u0433\u0438 (<b>${service.maxQty.toLocaleString()}</b> \u0448\u0442.).
+
+\u041F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u0443\u043C\u0435\u043D\u044C\u0448\u0438\u0442\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u0437\u0430\u043F\u0443\u0441\u043A\u043E\u0432:`,
+            {
+              parse_mode: "HTML",
+              ...import_telegraf3.Markup.inlineKeyboard([[import_telegraf3.Markup.button.callback("\u274C \u041E\u0442\u043C\u0435\u043D\u0430", "cancel_wizard")]])
+            }
+          );
+        }
         orderData.runs = runs;
         await ctx.reply(
           "\u23F1 <b>\u0418\u043D\u0442\u0435\u0440\u0432\u0430\u043B \u043C\u0435\u0436\u0434\u0443 \u0437\u0430\u043F\u0443\u0441\u043A\u0430\u043C\u0438 (\u043C\u0438\u043D\u0443\u0442\u044B)</b>\n\n\u0421 \u043A\u0430\u043A\u043E\u0439 \u043F\u0430\u0443\u0437\u043E\u0439 \u0437\u0430\u043F\u0443\u0441\u043A\u0430\u0442\u044C \u043A\u0430\u0436\u0434\u0443\u044E \u043F\u0430\u0447\u043A\u0443? (\u043E\u0442 5 \u0434\u043E 1440 \u043C\u0438\u043D\u0443\u0442):",
@@ -142065,7 +142225,14 @@ ${escapeHtml2(validationErrorMsg)}
       const user = await resolveUser3(tgId);
       if (!user) return ctx.scene.leave();
       if (Number(user.balance) >= totalCents) {
+        await ctx.editMessageText("\u23F3 <b>\u041E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u0438\u0435 \u0437\u0430\u043A\u0430\u0437\u0430...</b>\n\n\u041F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u043F\u043E\u0434\u043E\u0436\u0434\u0438\u0442\u0435, \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u044F \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442\u0441\u044F \u0432 \u0441\u0438\u0441\u0442\u0435\u043C\u0435.", {
+          parse_mode: "HTML"
+        }).catch(() => {
+        });
         try {
+          if (!orderData.idempotencyKey) {
+            orderData.idempotencyKey = `bot-order-${user.id}-${service.id}-${Date.now()}`;
+          }
           const res = await orderService.createOrder(user.id, {
             serviceId: service.id,
             link,
@@ -142075,7 +142242,7 @@ ${escapeHtml2(validationErrorMsg)}
             runs,
             interval,
             isLinkOverridden: Boolean(isLinkOverridden)
-          });
+          }, orderData.idempotencyKey);
           if (!res.success) {
             throw new Error(res.error || "\u041E\u0448\u0438\u0431\u043A\u0430 \u043E\u0444\u043E\u0440\u043C\u043B\u0435\u043D\u0438\u044F \u0437\u0430\u043A\u0430\u0437\u0430");
           }
@@ -142887,7 +143054,7 @@ var init_ssrf_guard3 = __esm({
 });
 
 // src/services/providers/universal.provider.ts
-var ProviderServiceSchema, ProviderServicesArraySchema, UniversalProvider;
+var ProviderAmbiguousError, ProviderServiceSchema, ProviderServicesArraySchema, UniversalProvider;
 var init_universal_provider = __esm({
   "src/services/providers/universal.provider.ts"() {
     "use strict";
@@ -142895,6 +143062,13 @@ var init_universal_provider = __esm({
     init_ssrf_guard3();
     init_proxy_fetch();
     init_zod();
+    ProviderAmbiguousError = class extends Error {
+      isAmbiguous = true;
+      constructor(message, options) {
+        super(message, options);
+        this.name = "ProviderAmbiguousError";
+      }
+    };
     ProviderServiceSchema = external_exports.object({
       service: external_exports.union([external_exports.string(), external_exports.number()]).transform(String),
       name: external_exports.string().optional().default("Unknown Service"),
@@ -143039,10 +143213,11 @@ var init_universal_provider = __esm({
                 }
               } catch {
               }
+              const HttpErr = response.status >= 500 ? ProviderAmbiguousError : Error;
               if (parsedError) {
-                throw new Error(parsedError);
+                throw new HttpErr(parsedError);
               }
-              throw new Error(`Provider HTTP Error: ${response.status}`);
+              throw new HttpErr(`Provider HTTP Error: ${response.status}`);
             }
             const text = await response.text();
             try {
@@ -143058,7 +143233,7 @@ var init_universal_provider = __esm({
               await CircuitBreaker.recordSuccess(this.apiUrl);
               return data;
             } catch (jsonErr) {
-              throw new Error(`Provider returned invalid JSON: ${text.substring(0, 100)}...`, { cause: jsonErr });
+              throw new ProviderAmbiguousError(`Provider returned invalid JSON: ${text.substring(0, 100)}...`, { cause: jsonErr });
             }
           } catch (error2) {
             const errName = error2 instanceof Error ? error2.name : "";
@@ -143068,12 +143243,14 @@ var init_universal_provider = __esm({
                 continue;
               }
               await CircuitBreaker.recordFailure(this.apiUrl);
-              throw new Error("Provider Request Timeout (15s)", { cause: error2 });
+              throw new ProviderAmbiguousError("Provider Request Timeout (15s)", { cause: error2 });
             }
             if (errName !== "CircuitBreakerOpenException" && attempt === retries) {
               await CircuitBreaker.recordFailure(this.apiUrl);
             }
-            if (attempt === retries) throw error2;
+            if (attempt === retries) {
+              throw error2 instanceof TypeError ? new ProviderAmbiguousError(error2.message, { cause: error2 }) : error2;
+            }
           } finally {
             clearTimeout(timeoutId);
           }
@@ -143168,7 +143345,7 @@ var init_universal_provider = __esm({
           const err = this.extractNested(res, this.mapping.response.errorField);
           if (err) throw new Error(String(err));
           const orderId = this.extractNested(res, this.mapping.response.orderIdField);
-          if (!orderId) throw new Error("Order ID not found in provider response");
+          if (!orderId) throw new ProviderAmbiguousError("Order ID not found in provider response");
           return { order: String(orderId) };
         } else {
           if (res.error) throw new Error(String(res.error));
@@ -146107,34 +146284,49 @@ function setupStorePipeline(bot2, opts) {
       const bindToken = await db.authToken.findFirst({ where: { token: payload } });
       if (bindToken && !bindToken.used && bindToken.expiresAt > /* @__PURE__ */ new Date()) {
         const webUserId = bindToken.userId;
-        try {
-          await db.$transaction(async (tx) => {
-            await tx.authToken.updateMany({ where: { id: bindToken.id, used: false }, data: { used: true } });
-            const tempUser = await tx.user.findFirst({ where: { telegramId: tgId, tenantId } });
-            if (tempUser && tempUser.id !== webUserId) {
-              await tx.ticket.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-              await tx.order.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-              await tx.payment.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-              if (tempUser.balance > BigInt(0)) {
-                const amount = Number(tempUser.balance);
-                await WalletOps.charge(tx, tempUser.id, amount, `\u0421\u043B\u0438\u044F\u043D\u0438\u0435 Telegram \u0441 ${webUserId}`, {
-                  idempotencyKey: `merge-debit-bot-${tempUser.id}-${webUserId}`
-                });
-                await WalletOps.credit(tx, webUserId, amount, `\u041F\u0435\u0440\u0435\u043D\u043E\u0441 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u0441 Telegram ${tempUser.email}`, {
-                  idempotencyKey: `merge-credit-bot-${tempUser.id}-${webUserId}`
-                });
-              }
-              await tx.user.update({ where: { id: tempUser.id }, data: { telegramId: null } });
-            }
-            await tx.user.update({ where: { id: webUserId }, data: { telegramId: tgId } });
-          });
-          return ctx.reply(
-            "\u{1F389} <b>\u0410\u043A\u043A\u0430\u0443\u043D\u0442 \u0443\u0441\u043F\u0435\u0448\u043D\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D!</b>\n\n\u0422\u0435\u043F\u0435\u0440\u044C \u0432\u044B \u043C\u043E\u0436\u0435\u0442\u0435 \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u044C \u0437\u0430\u043A\u0430\u0437\u0430\u043C\u0438 \u0438 \u0431\u0430\u043B\u0430\u043D\u0441\u043E\u043C \u043F\u0440\u044F\u043C\u043E \u0447\u0435\u0440\u0435\u0437 Telegram.",
-            { parse_mode: "HTML", ...replyKeyboard }
-          );
-        } catch (err) {
-          console.error("[StorePipeline Bind] Error:", err);
+        const webUser = await db.user.findUnique({
+          where: { id: webUserId },
+          select: { id: true, email: true }
+        });
+        if (!webUser) {
+          return ctx.reply("\u274C \u041E\u0448\u0438\u0431\u043A\u0430: \u0446\u0435\u043B\u0435\u0432\u043E\u0439 \u0430\u043A\u043A\u0430\u0443\u043D\u0442 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D.");
         }
+        const tempUser = await db.user.findFirst({ where: { telegramId: tgId, tenantId } });
+        if (tempUser && tempUser.id === webUserId) {
+          return ctx.reply("\u2705 \u042D\u0442\u043E\u0442 Telegram \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043A \u0432\u0430\u0448\u0435\u043C\u0443 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0443.", {
+            parse_mode: "HTML",
+            ...replyKeyboard
+          });
+        }
+        if (tempUser && !tempUser.isBotOnly && tempUser.id !== webUserId) {
+          return ctx.reply(
+            "\u274C <b>\u041F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 \u043D\u0435\u0432\u043E\u0437\u043C\u043E\u0436\u043D\u0430</b>\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u041A \u044D\u0442\u043E\u043C\u0443 Telegram \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043F\u043E\u043B\u043D\u043E\u0446\u0435\u043D\u043D\u044B\u0439 \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.\n\u0427\u0442\u043E\u0431\u044B \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0434\u0440\u0443\u0433\u043E\u0439 \u0430\u043A\u043A\u0430\u0443\u043D\u0442, \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u043E\u0442\u0432\u044F\u0436\u0438\u0442\u0435 Telegram \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u043F\u0440\u043E\u0444\u0438\u043B\u044F \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.",
+            { parse_mode: "HTML" }
+          );
+        }
+        const emailMasked = webUser.email ? webUser.email.replace(/^(.)(.*)(@.*)$/, (_m, a, b, c) => `${a}${"*".repeat(Math.min(b.length, 4))}${c}`) : "\u043F\u0440\u043E\u0444\u0438\u043B\u044C \u043D\u0430 \u0441\u0430\u0439\u0442\u0435";
+        const balanceTransferNotice = tempUser && tempUser.balance > BigInt(0) ? `
+
+\u26A0\uFE0F <b>\u0411\u0430\u043B\u0430\u043D\u0441:</b> \u0411\u0430\u043B\u0430\u043D\u0441 \u044D\u0442\u043E\u0433\u043E Telegram (${(Number(tempUser.balance) / 100).toFixed(2)} \u20BD) \u0431\u0443\u0434\u0435\u0442 \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0451\u043D \u0441 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u043E\u043C \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.` : "";
+        return ctx.reply(
+          `\u{1F510} <b>\u041F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430</b>
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+\u0412\u044B \u0441\u043E\u0431\u0438\u0440\u0430\u0435\u0442\u0435\u0441\u044C \u0441\u0432\u044F\u0437\u0430\u0442\u044C \u044D\u0442\u043E\u0442 Telegram \u0441 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u043E\u043C: <b>${emailMasked}</b>.${balanceTransferNotice}
+
+\u0412\u044B \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u0435\u0442\u0435 \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u0435\u0439?`,
+          {
+            parse_mode: "HTML",
+            ...import_telegraf5.Markup.inlineKeyboard([
+              [import_telegraf5.Markup.button.callback("\u2705 \u0414\u0430, \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0430\u043A\u043A\u0430\u0443\u043D\u0442", `confirm_bind:${payload}`)],
+              [import_telegraf5.Markup.button.callback("\u274C \u041E\u0442\u043C\u0435\u043D\u0430", "cancel_bind")]
+            ])
+          }
+        );
+      } else {
+        return ctx.reply(
+          "\u26A0\uFE0F <b>\u0421\u0441\u044B\u043B\u043A\u0430 \u043D\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u0430</b>\n\n\u0421\u0440\u043E\u043A \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044F \u0441\u0441\u044B\u043B\u043A\u0438 \u0438\u0441\u0442\u0435\u043A \u0438\u043B\u0438 \u043E\u043D\u0430 \u0443\u0436\u0435 \u0431\u044B\u043B\u0430 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u0430. \u041F\u043E\u043B\u0443\u0447\u0438\u0442\u0435 \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.",
+          { parse_mode: "HTML" }
+        );
       }
     }
     let user = await db.user.findFirst({ where: { telegramId: tgId, tenantId } });
@@ -146205,6 +146397,83 @@ function setupStorePipeline(bot2, opts) {
     await ctx.answerCbQuery().catch(() => {
     });
     return sendBindInstructions2(ctx);
+  });
+  bot2.action(/^confirm_bind:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery("\u041F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438...").catch(() => {
+    });
+    if (!ctx.match || !ctx.from) return;
+    const payload = ctx.match[1];
+    const tgId = String(ctx.from.id);
+    await ctx.editMessageText("\u23F3 <b>\u041F\u0440\u0438\u0432\u044F\u0437\u044B\u0432\u0430\u0435\u043C \u0430\u043A\u043A\u0430\u0443\u043D\u0442...</b>\n\n\u041F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u043F\u043E\u0434\u043E\u0436\u0434\u0438\u0442\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438.", {
+      parse_mode: "HTML"
+    }).catch(() => {
+    });
+    const bindToken = await db.authToken.findFirst({
+      where: { token: payload }
+    });
+    if (!bindToken || bindToken.used || bindToken.expiresAt <= /* @__PURE__ */ new Date()) {
+      return ctx.editMessageText(
+        "\u26A0\uFE0F <b>\u0421\u0441\u044B\u043B\u043A\u0430 \u043D\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u0430</b>\n\n\u0421\u0440\u043E\u043A \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044F \u0441\u0441\u044B\u043B\u043A\u0438 \u0438\u0441\u0442\u0435\u043A \u0438\u043B\u0438 \u043E\u043D\u0430 \u0443\u0436\u0435 \u0431\u044B\u043B\u0430 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u0430. \u0421\u0433\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u0439\u0442\u0435 \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.",
+        { parse_mode: "HTML" }
+      ).catch(() => {
+      });
+    }
+    const webUserId = bindToken.userId;
+    try {
+      await db.$transaction(async (tx) => {
+        const consumedToken = await tx.authToken.updateMany({
+          where: { id: bindToken.id, used: false },
+          data: { used: true }
+        });
+        if (consumedToken.count === 0) {
+          throw new Error("\u0422\u043E\u043A\u0435\u043D \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438 \u0443\u0436\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D");
+        }
+        const tempUser = await tx.user.findFirst({ where: { telegramId: tgId, tenantId } });
+        if (tempUser && tempUser.id !== webUserId) {
+          if (!tempUser.isBotOnly) {
+            throw new Error("\u041D\u0435\u0432\u043E\u0437\u043C\u043E\u0436\u043D\u043E \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0438\u0442\u044C: \u043A Telegram \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043D\u0435\u0437\u0430\u0432\u0438\u0441\u0438\u043C\u044B\u0439 \u0432\u0435\u0431-\u0430\u043A\u043A\u0430\u0443\u043D\u0442.");
+          }
+          await tx.ticket.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.order.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.payment.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.invoice.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.auditLog.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          if (tempUser.balance > BigInt(0)) {
+            const amount = Number(tempUser.balance);
+            await WalletOps.charge(tx, tempUser.id, amount, `\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u043F\u0440\u0438 \u0441\u043B\u0438\u044F\u043D\u0438\u0438 Telegram ${tempUser.email} \u0441 ${webUserId}`, {
+              idempotencyKey: `merge-debit-bot-${tempUser.id}-${webUserId}`
+            });
+            await WalletOps.credit(tx, webUserId, amount, `\u041F\u0435\u0440\u0435\u043D\u043E\u0441 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u0441\u043E \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430 Telegram ${tempUser.email}`, {
+              idempotencyKey: `merge-credit-bot-${tempUser.id}-${webUserId}`
+            });
+          }
+          await tx.user.update({ where: { id: tempUser.id }, data: { telegramId: null } });
+        }
+        await tx.user.update({ where: { id: webUserId }, data: { telegramId: tgId } });
+      });
+      await ctx.editMessageText(
+        "\u{1F389} <b>\u0410\u043A\u043A\u0430\u0443\u043D\u0442 \u0443\u0441\u043F\u0435\u0448\u043D\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D!</b>\n\n\u0422\u0435\u043F\u0435\u0440\u044C \u0432\u044B \u043C\u043E\u0436\u0435\u0442\u0435 \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u044C \u0437\u0430\u043A\u0430\u0437\u0430\u043C\u0438 \u0438 \u0431\u0430\u043B\u0430\u043D\u0441\u043E\u043C \u043F\u0440\u044F\u043C\u043E \u0447\u0435\u0440\u0435\u0437 Telegram.",
+        { parse_mode: "HTML" }
+      ).catch(() => {
+      });
+      return ctx.reply("\u0413\u043B\u0430\u0432\u043D\u043E\u0435 \u043C\u0435\u043D\u044E:", { ...replyKeyboard });
+    } catch (err) {
+      console.error("[StorePipeline Bind] Error:", err);
+      return ctx.editMessageText(
+        "\u274C <b>\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438</b>\n\n" + (err instanceof Error ? err.message : "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0430\u043A\u043A\u0430\u0443\u043D\u0442. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u0432 \u043B\u0438\u0447\u043D\u043E\u043C \u043A\u0430\u0431\u0438\u043D\u0435\u0442\u0435."),
+        { parse_mode: "HTML" }
+      ).catch(() => {
+      });
+    }
+  });
+  bot2.action("cancel_bind", async (ctx) => {
+    await ctx.answerCbQuery("\u041F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430").catch(() => {
+    });
+    return ctx.editMessageText(
+      "\u274C <b>\u041F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430</b>\n\n\u0412\u0430\u0448 \u0442\u0435\u043A\u0443\u0449\u0438\u0439 \u043F\u0440\u043E\u0444\u0438\u043B\u044C Telegram \u0438 \u0431\u0430\u043B\u0430\u043D\u0441 \u0432 \u043F\u043E\u043B\u043D\u043E\u0439 \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E\u0441\u0442\u0438.",
+      { parse_mode: "HTML" }
+    ).catch(() => {
+    });
   });
   bot2.action("support", async (ctx) => {
     await ctx.answerCbQuery().catch(() => {
@@ -147452,28 +147721,31 @@ var init_payment_service = __esm({
        * 
        * Flow: Payment PENDING → SUCCEEDED → Order AWAITING_PAYMENT → PENDING
        */
-      async confirmPayment(gatewayId, amount, userId, _isDevSandbox = false, gatewayType = "yookassa", internalPaymentId, metadataType, receiptId) {
+      async confirmPayment(gatewayId, amount, userId, _isDevSandbox = false, gatewayType = "yookassa", internalPaymentId, metadataType, receiptId, metadata) {
         const activatedOrders = [];
         let paidAmountBigInt = BigInt(amount);
         let isOrderFlow = false;
         let creditedUserId = null;
+        let creditedPaymentId = null;
         const pendingSecurityAlerts = [];
         try {
-          const isMockPayment = gatewayId.startsWith("test_") || gatewayId.startsWith("mock_");
-          if (process.env.NODE_ENV === "production" && gatewayType === "yookassa" && !_isDevSandbox && !isMockPayment) {
-            let paymentTenantId = "smmplan";
-            await runWithTenantBypass("Webhook pre-check payment tenant resolution", async () => {
+          const isMockPayment = gatewayId.startsWith("test_") || gatewayId.startsWith("mock_") || gatewayId.startsWith("yoo_test_mock_");
+          if (process.env.NODE_ENV === "production" && gatewayType === "yookassa") {
+            const preCheck = await runWithTenantBypass("Webhook pre-check payment tenant resolution", async () => {
               if (internalPaymentId) {
-                const p = await db.payment.findUnique({ where: { id: internalPaymentId }, select: { tenantId: true } });
-                if (p?.tenantId) paymentTenantId = p.tenantId;
-              } else if (gatewayId) {
-                const p = await db.payment.findUnique({ where: { gatewayId }, select: { tenantId: true } });
-                if (p?.tenantId) paymentTenantId = p.tenantId;
+                return db.payment.findUnique({ where: { id: internalPaymentId }, select: { tenantId: true, gatewayId: true } });
               }
+              if (gatewayId) {
+                return db.payment.findUnique({ where: { gatewayId }, select: { tenantId: true, gatewayId: true } });
+              }
+              return null;
             });
+            const paymentTenantId = preCheck?.tenantId || "smmplan";
+            const dbGatewayId = preCheck?.gatewayId ?? null;
             const { SettingsManager: SettingsManager2 } = await Promise.resolve().then(() => (init_settings(), settings_exports));
             const isTestMode = await SettingsManager2.isTestMode(paymentTenantId);
-            if (!isTestMode) {
+            const isServerIssuedMock = isTestMode && isMockPayment && dbGatewayId === gatewayId;
+            if (!isServerIssuedMock) {
               const secrets = await SettingsManager2.getPaymentSecrets(paymentTenantId);
               if (secrets.yookassaShopId && secrets.yookassaSecretKey) {
                 const authHeader = "Basic " + Buffer.from(`${secrets.yookassaShopId}:${secrets.yookassaSecretKey}`).toString("base64");
@@ -147486,6 +147758,13 @@ var init_payment_service = __esm({
                     const data = await response.json();
                     if (data.status !== "succeeded") {
                       throw new Error(`PAYMENT_NOT_SUCCEEDED: Real gateway status is ${data.status}`);
+                    }
+                    if (data.id !== gatewayId) {
+                      throw new Error(`PAYMENT_ID_MISMATCH: Remote id ${String(data.id)} != webhook id ${gatewayId}`);
+                    }
+                    const remotePaymentId = data.metadata?.paymentId;
+                    if (internalPaymentId && remotePaymentId && remotePaymentId !== internalPaymentId) {
+                      throw new Error(`PAYMENT_METADATA_MISMATCH: Remote paymentId ${String(remotePaymentId)} != ${internalPaymentId}`);
                     }
                     const realAmountKopecks = parseYooKassaAmountToKopecks(data.amount?.value);
                     if (realAmountKopecks < BigInt(amount)) {
@@ -147543,7 +147822,7 @@ var init_payment_service = __esm({
               }));
               throw new Error("PAYMENT_AMOUNT_MISMATCH: Amount received from gateway does not match expected payment amount.");
             }
-            let processedPaymentId;
+            let processedPaymentId2;
             let isOrderPayment;
             let linkedOrderId;
             let targetUserId;
@@ -147566,7 +147845,7 @@ var init_payment_service = __esm({
                 );
                 return true;
               }
-              processedPaymentId = currentPayment.id;
+              processedPaymentId2 = currentPayment.id;
               isOrderPayment = !!currentPayment.orderId;
               linkedOrderId = currentPayment.orderId || "";
             } else {
@@ -147590,7 +147869,7 @@ var init_payment_service = __esm({
                       orderNumericId: order.numericId,
                       requiredCharge: order.charge.toString(),
                       creditedAmount: creditAmount.toString(),
-                      paymentId: processedPaymentId
+                      paymentId: processedPaymentId2
                     }
                   }));
                   throw new Error(`UNDERPAID_ORDER: Credited amount (${creditAmount}) is less than required order charge (${order.charge})`);
@@ -147615,7 +147894,7 @@ var init_payment_service = __esm({
                   targetUserId,
                   creditAmount,
                   `\u041E\u043F\u043B\u0430\u0442\u0430 \u0437\u0430\u043A\u0430\u0437\u0430 #${order.numericId} \u0447\u0435\u0440\u0435\u0437 \u0448\u043B\u044E\u0437`,
-                  { idempotencyKey: `gateway-credit-${processedPaymentId}`, tenantId: currentPayment?.tenantId }
+                  { idempotencyKey: `gateway-credit-${processedPaymentId2}`, tenantId: currentPayment?.tenantId }
                 );
                 await WalletOps.charge(
                   tx,
@@ -147629,7 +147908,7 @@ var init_payment_service = __esm({
             const basketTenantId = currentPayment?.tenantId;
             const basketOrders = await tx.order.findMany({
               where: {
-                paymentId: processedPaymentId,
+                paymentId: processedPaymentId2,
                 status: "AWAITING_PAYMENT",
                 ...basketTenantId ? { tenantId: basketTenantId } : {}
               },
@@ -147638,7 +147917,7 @@ var init_payment_service = __esm({
             if (basketOrders.length > 0) {
               await tx.order.updateMany({
                 where: {
-                  paymentId: processedPaymentId,
+                  paymentId: processedPaymentId2,
                   status: "AWAITING_PAYMENT",
                   ...basketTenantId ? { tenantId: basketTenantId } : {}
                 },
@@ -147662,7 +147941,7 @@ var init_payment_service = __esm({
                 targetUserId,
                 creditAmount,
                 `\u041E\u043F\u043B\u0430\u0442\u0430 \u043A\u043E\u0440\u0437\u0438\u043D\u044B \u0437\u0430\u043A\u0430\u0437\u043E\u0432 \u0447\u0435\u0440\u0435\u0437 \u0448\u043B\u044E\u0437`,
-                { idempotencyKey: `gateway-credit-${processedPaymentId}`, tenantId: currentPayment?.tenantId }
+                { idempotencyKey: `gateway-credit-${processedPaymentId2}`, tenantId: currentPayment?.tenantId }
               );
               const totalChargeCents = basketOrders.reduce((sum, order) => sum + order.charge, BigInt(0));
               if (creditAmount < totalChargeCents) {
@@ -147674,7 +147953,7 @@ var init_payment_service = __esm({
                 targetUserId,
                 totalChargeCents,
                 `\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0437\u0430 \u043E\u043F\u043B\u0430\u0442\u0443 \u043A\u043E\u0440\u0437\u0438\u043D\u044B \u0437\u0430\u043A\u0430\u0437\u043E\u0432 (${basketOrders.length} \u0448\u0442.)`,
-                { idempotencyKey: `gateway-basket-charge-${processedPaymentId}`, tenantId: currentPayment?.tenantId }
+                { idempotencyKey: `gateway-basket-charge-${processedPaymentId2}`, tenantId: currentPayment?.tenantId }
               );
             }
             if (!isOrderPayment && basketOrders.length === 0) {
@@ -147683,12 +147962,13 @@ var init_payment_service = __esm({
                 targetUserId,
                 creditAmount,
                 `\u041F\u043E\u043F\u043E\u043B\u043D\u0435\u043D\u0438\u0435 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u0447\u0435\u0440\u0435\u0437 ${gatewayType}`,
-                { idempotencyKey: `deposit-${processedPaymentId}`, tenantId: currentPayment?.tenantId }
+                { idempotencyKey: `deposit-${processedPaymentId2}`, tenantId: currentPayment?.tenantId }
               );
             }
             paidAmountBigInt = creditAmount;
             isOrderFlow = isOrderPayment || basketOrders.length > 0;
             creditedUserId = targetUserId;
+            creditedPaymentId = processedPaymentId2;
           });
           safeRevalidatePath("/dashboard", "layout");
           if (activatedOrders.length > 0) {
@@ -147709,6 +147989,56 @@ var init_payment_service = __esm({
             return true;
           }
           const beneficiaryUserId = creditedUserId;
+          const processedPaymentId = creditedPaymentId;
+          let resolvedMetadata = metadata;
+          if (!resolvedMetadata) {
+            try {
+              const { redis: redis2 } = await Promise.resolve().then(() => (init_redis(), redis_exports));
+              const cached = await redis2.get(`payment:metadata:${processedPaymentId}`);
+              if (cached) {
+                resolvedMetadata = JSON.parse(cached);
+              }
+            } catch {
+            }
+          }
+          let isAutoOrderCreated = false;
+          if (resolvedMetadata && (resolvedMetadata.type === "AUTO_ORDER_TOPUP" || metadataType === "AUTO_ORDER_TOPUP")) {
+            const serviceId = resolvedMetadata.serviceId;
+            const link = resolvedMetadata.link;
+            const quantity = Number(resolvedMetadata.quantity);
+            const charge = Number(resolvedMetadata.totalCents);
+            const providerCost = Number(resolvedMetadata.providerCostCents || 0);
+            const runs = resolvedMetadata.runs ? Number(resolvedMetadata.runs) : void 0;
+            const interval = resolvedMetadata.interval ? Number(resolvedMetadata.interval) : void 0;
+            const isLinkOverridden = Boolean(resolvedMetadata.isLinkOverridden);
+            if (serviceId && link && quantity && charge) {
+              try {
+                const { orderService: orderService2 } = await Promise.resolve().then(() => (init_order_service(), order_service_exports));
+                const autoOrderRes = await orderService2.createOrder(
+                  beneficiaryUserId,
+                  {
+                    serviceId,
+                    link,
+                    quantity,
+                    charge,
+                    providerCost,
+                    runs,
+                    interval,
+                    isLinkOverridden
+                  },
+                  `auto-topup-order-${processedPaymentId}`
+                );
+                if (autoOrderRes.success && autoOrderRes.orderId) {
+                  isAutoOrderCreated = true;
+                  console.info(`[PaymentService] AUTO_ORDER_TOPUP successfully executed for payment ${processedPaymentId}: order #${autoOrderRes.orderId}`);
+                } else {
+                  console.error(`[PaymentService] AUTO_ORDER_TOPUP order creation failed for payment ${processedPaymentId}:`, autoOrderRes.error);
+                }
+              } catch (autoErr) {
+                console.error(`[PaymentService] AUTO_ORDER_TOPUP exception for payment ${processedPaymentId}:`, autoErr);
+              }
+            }
+          }
           try {
             const userWithTg = await db.user.findUnique({
               where: { id: beneficiaryUserId },
@@ -147719,7 +148049,7 @@ var init_payment_service = __esm({
               const { multiBotManager: multiBotManager2 } = await Promise.resolve().then(() => (init_multi_bot_manager(), multi_bot_manager_exports));
               const amountRub = (Number(paidAmountBigInt) / 100).toLocaleString("ru-RU");
               const newBal = (Number(userWithTg.balance) / 100).toFixed(2);
-              if (isOrderFlow || activatedOrders.length > 0) {
+              if (isOrderFlow || activatedOrders.length > 0 || isAutoOrderCreated) {
                 await multiBotManager2.sendTenantMessage(
                   tenantId,
                   userWithTg.telegramId,
@@ -148802,66 +149132,48 @@ var init_index = __esm({
         });
         if (bindToken && !bindToken.used && bindToken.expiresAt > /* @__PURE__ */ new Date()) {
           const webUserId = bindToken.userId;
-          try {
-            await db.$transaction(async (tx) => {
-              const consumedToken = await tx.authToken.updateMany({
-                where: { id: bindToken.id, used: false },
-                data: { used: true }
-              });
-              if (consumedToken.count === 0) {
-                throw new Error("\u0422\u043E\u043A\u0435\u043D \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438 \u0443\u0436\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D");
-              }
-              const tempUser = await tx.user.findFirst({ where: { telegramId: tgId, tenantId: botTenantId4 } });
-              if (tempUser && tempUser.id !== webUserId) {
-                await tx.ticket.updateMany({
-                  where: { userId: tempUser.id },
-                  data: { userId: webUserId }
-                });
-                await tx.order.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-                await tx.payment.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-                await tx.invoice.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-                await tx.auditLog.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-                if (tempUser.balance > BigInt(0)) {
-                  const amount = Number(tempUser.balance);
-                  const reasonDebit = `\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u043F\u0440\u0438 \u0430\u0432\u0442\u043E-\u0441\u043B\u0438\u044F\u043D\u0438\u0438 Telegram ${tempUser.email} \u0441 ${webUserId}`;
-                  const reasonCredit = `\u041F\u0435\u0440\u0435\u043D\u043E\u0441 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u0441\u043E \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430 Telegram ${tempUser.email}`;
-                  await WalletOps.charge(tx, tempUser.id, amount, reasonDebit, {
-                    idempotencyKey: `merge-debit-bot-${tempUser.id}-${webUserId}`
-                  });
-                  await WalletOps.credit(tx, webUserId, amount, reasonCredit, {
-                    idempotencyKey: `merge-credit-bot-${tempUser.id}-${webUserId}`
-                  });
-                }
-                await tx.user.update({
-                  where: { id: tempUser.id },
-                  data: {
-                    telegramId: null
-                  }
-                });
-              }
-              await tx.user.update({
-                where: { id: webUserId },
-                data: { telegramId: tgId }
-              });
+          const webUser = await db.user.findUnique({
+            where: { id: webUserId },
+            select: { id: true, email: true }
+          });
+          if (!webUser) {
+            return ctx.reply("\u274C \u041E\u0448\u0438\u0431\u043A\u0430: \u0446\u0435\u043B\u0435\u0432\u043E\u0439 \u0430\u043A\u043A\u0430\u0443\u043D\u0442 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D.");
+          }
+          const tempUser = await db.user.findFirst({ where: { telegramId: tgId, tenantId: botTenantId4 } });
+          if (tempUser && tempUser.id === webUserId) {
+            return ctx.reply("\u2705 \u042D\u0442\u043E\u0442 Telegram \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043A \u0432\u0430\u0448\u0435\u043C\u0443 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0443.", {
+              parse_mode: "HTML",
+              ...import_telegraf7.Markup.keyboard([
+                ["\u{1F6CD} \u041A\u0430\u0442\u0430\u043B\u043E\u0433 \u0443\u0441\u043B\u0443\u0433", "\u{1F4E6} \u041C\u043E\u0438 \u0437\u0430\u043A\u0430\u0437\u044B"],
+                ["\u{1F4B0} \u041F\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u044C", "\u{1F464} \u041F\u0440\u043E\u0444\u0438\u043B\u044C"],
+                ["\u{1F198} \u041F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430", "\u{1F465} \u0420\u0435\u0444\u0435\u0440\u0430\u043B\u044B"]
+              ]).resize()
             });
+          }
+          if (tempUser && !tempUser.isBotOnly && tempUser.id !== webUserId) {
             return ctx.reply(
-              "\u{1F389} <b>\u0410\u043A\u043A\u0430\u0443\u043D\u0442 \u0443\u0441\u043F\u0435\u0448\u043D\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D!</b>\n\n\u0422\u0435\u043F\u0435\u0440\u044C \u0432\u044B \u043C\u043E\u0436\u0435\u0442\u0435 \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u044C \u0437\u0430\u043A\u0430\u0437\u0430\u043C\u0438 \u0438 \u0431\u0430\u043B\u0430\u043D\u0441\u043E\u043C \u043F\u0440\u044F\u043C\u043E \u0447\u0435\u0440\u0435\u0437 Telegram-\u0431\u043E\u0442\u0430.",
-              {
-                parse_mode: "HTML",
-                ...import_telegraf7.Markup.keyboard([
-                  ["\u{1F6CD} \u041A\u0430\u0442\u0430\u043B\u043E\u0433 \u0443\u0441\u043B\u0443\u0433", "\u{1F4E6} \u041C\u043E\u0438 \u0437\u0430\u043A\u0430\u0437\u044B"],
-                  ["\u{1F4B0} \u041F\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u044C", "\u{1F464} \u041F\u0440\u043E\u0444\u0438\u043B\u044C"],
-                  ["\u{1F198} \u041F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430", "\u{1F465} \u0420\u0435\u0444\u0435\u0440\u0430\u043B\u044B"]
-                ]).resize()
-              }
-            );
-          } catch (err) {
-            console.error("[Bot Auth Bind] Transaction failed:", err);
-            return ctx.reply(
-              "\u274C <b>\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438</b>\n\n" + (err instanceof Error ? err.message : "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0430\u043A\u043A\u0430\u0443\u043D\u0442. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u0432 \u043B\u0438\u0447\u043D\u043E\u043C \u043A\u0430\u0431\u0438\u043D\u0435\u0442\u0435."),
+              "\u274C <b>\u041F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 \u043D\u0435\u0432\u043E\u0437\u043C\u043E\u0436\u043D\u0430</b>\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u041A \u044D\u0442\u043E\u043C\u0443 Telegram \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043F\u043E\u043B\u043D\u043E\u0446\u0435\u043D\u043D\u044B\u0439 \u043F\u0440\u043E\u0444\u0438\u043B\u044C \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.\n\u0427\u0442\u043E\u0431\u044B \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0434\u0440\u0443\u0433\u043E\u0439 \u0430\u043A\u043A\u0430\u0443\u043D\u0442, \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u043E\u0442\u0432\u044F\u0436\u0438\u0442\u0435 Telegram \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u043F\u0440\u043E\u0444\u0438\u043B\u044F \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.",
               { parse_mode: "HTML" }
             );
           }
+          const emailMasked = webUser.email ? webUser.email.replace(/^(.)(.*)(@.*)$/, (_m, a, b, c) => `${a}${"*".repeat(Math.min(b.length, 4))}${c}`) : "\u043F\u0440\u043E\u0444\u0438\u043B\u044C \u043D\u0430 \u0441\u0430\u0439\u0442\u0435";
+          const balanceTransferNotice = tempUser && tempUser.balance > BigInt(0) ? `
+
+\u26A0\uFE0F <b>\u0411\u0430\u043B\u0430\u043D\u0441:</b> \u0411\u0430\u043B\u0430\u043D\u0441 \u044D\u0442\u043E\u0433\u043E Telegram (${(Number(tempUser.balance) / 100).toFixed(2)} \u20BD) \u0431\u0443\u0434\u0435\u0442 \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0451\u043D \u0441 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u043E\u043C \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.` : "";
+          return ctx.reply(
+            `\u{1F510} <b>\u041F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430</b>
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+\u0412\u044B \u0441\u043E\u0431\u0438\u0440\u0430\u0435\u0442\u0435\u0441\u044C \u0441\u0432\u044F\u0437\u0430\u0442\u044C \u044D\u0442\u043E\u0442 Telegram \u0441 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u043E\u043C: <b>${emailMasked}</b>.${balanceTransferNotice}
+
+\u0412\u044B \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u0435\u0442\u0435 \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u0435 \u043F\u0440\u043E\u0444\u0438\u043B\u0435\u0439?`,
+            {
+              parse_mode: "HTML",
+              ...import_telegraf7.Markup.inlineKeyboard([
+                [import_telegraf7.Markup.button.callback("\u2705 \u0414\u0430, \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0430\u043A\u043A\u0430\u0443\u043D\u0442", `confirm_bind:${payload}`)],
+                [import_telegraf7.Markup.button.callback("\u274C \u041E\u0442\u043C\u0435\u043D\u0430", "cancel_bind")]
+              ])
+            }
+          );
         } else {
           return ctx.reply(
             "\u26A0\uFE0F <b>\u0421\u0441\u044B\u043B\u043A\u0430 \u043D\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u0430</b>\n\n\u0421\u0440\u043E\u043A \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044F \u0441\u0441\u044B\u043B\u043A\u0438 \u0438\u0441\u0442\u0435\u043A \u0438\u043B\u0438 \u043E\u043D\u0430 \u0443\u0436\u0435 \u0431\u044B\u043B\u0430 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u0430. \u041F\u043E\u043B\u0443\u0447\u0438\u0442\u0435 \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.",
@@ -149148,6 +149460,102 @@ var init_index = __esm({
     bot.action("bind_account", async (ctx) => {
       await ctx.answerCbQuery();
       await sendBindInstructions(ctx);
+    });
+    bot.action(/^confirm_bind:(.+)$/, async (ctx) => {
+      await ctx.answerCbQuery("\u041F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438...").catch(() => {
+      });
+      if (!ctx.match || !ctx.from) return;
+      const payload = ctx.match[1];
+      const tgId = String(ctx.from.id);
+      await ctx.editMessageText("\u23F3 <b>\u041F\u0440\u0438\u0432\u044F\u0437\u044B\u0432\u0430\u0435\u043C \u0430\u043A\u043A\u0430\u0443\u043D\u0442...</b>\n\n\u041F\u043E\u0436\u0430\u043B\u0443\u0439\u0441\u0442\u0430, \u043F\u043E\u0434\u043E\u0436\u0434\u0438\u0442\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043D\u0438\u044F \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438.", {
+        parse_mode: "HTML"
+      }).catch(() => {
+      });
+      const bindToken = await db.authToken.findFirst({
+        where: { token: payload }
+      });
+      if (!bindToken || bindToken.used || bindToken.expiresAt <= /* @__PURE__ */ new Date()) {
+        return ctx.editMessageText(
+          "\u26A0\uFE0F <b>\u0421\u0441\u044B\u043B\u043A\u0430 \u043D\u0435\u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0442\u0435\u043B\u044C\u043D\u0430</b>\n\n\u0421\u0440\u043E\u043A \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044F \u0441\u0441\u044B\u043B\u043A\u0438 \u0438\u0441\u0442\u0435\u043A \u0438\u043B\u0438 \u043E\u043D\u0430 \u0443\u0436\u0435 \u0431\u044B\u043B\u0430 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u0430. \u0421\u0433\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u0439\u0442\u0435 \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435.",
+          { parse_mode: "HTML" }
+        ).catch(() => {
+        });
+      }
+      const webUserId = bindToken.userId;
+      try {
+        await db.$transaction(async (tx) => {
+          const consumedToken = await tx.authToken.updateMany({
+            where: { id: bindToken.id, used: false },
+            data: { used: true }
+          });
+          if (consumedToken.count === 0) {
+            throw new Error("\u0422\u043E\u043A\u0435\u043D \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438 \u0443\u0436\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D");
+          }
+          const tempUser = await tx.user.findFirst({ where: { telegramId: tgId, tenantId: botTenantId4 } });
+          if (tempUser && tempUser.id !== webUserId) {
+            if (!tempUser.isBotOnly) {
+              throw new Error("\u041D\u0435\u0432\u043E\u0437\u043C\u043E\u0436\u043D\u043E \u043E\u0431\u044A\u0435\u0434\u0438\u043D\u0438\u0442\u044C: \u043A Telegram \u0443\u0436\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043D\u0435\u0437\u0430\u0432\u0438\u0441\u0438\u043C\u044B\u0439 \u0432\u0435\u0431-\u0430\u043A\u043A\u0430\u0443\u043D\u0442.");
+            }
+            await tx.ticket.updateMany({
+              where: { userId: tempUser.id },
+              data: { userId: webUserId }
+            });
+            await tx.order.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+            await tx.payment.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+            await tx.invoice.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+            await tx.auditLog.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+            if (tempUser.balance > BigInt(0)) {
+              const amount = Number(tempUser.balance);
+              const reasonDebit = `\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u043F\u0440\u0438 \u0441\u043B\u0438\u044F\u043D\u0438\u0438 Telegram ${tempUser.email} \u0441 ${webUserId}`;
+              const reasonCredit = `\u041F\u0435\u0440\u0435\u043D\u043E\u0441 \u0431\u0430\u043B\u0430\u043D\u0441\u0430 \u0441\u043E \u0441\u0442\u0430\u0440\u043E\u0433\u043E \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430 Telegram ${tempUser.email}`;
+              await WalletOps.charge(tx, tempUser.id, amount, reasonDebit, {
+                idempotencyKey: `merge-debit-bot-${tempUser.id}-${webUserId}`
+              });
+              await WalletOps.credit(tx, webUserId, amount, reasonCredit, {
+                idempotencyKey: `merge-credit-bot-${tempUser.id}-${webUserId}`
+              });
+            }
+            await tx.user.update({
+              where: { id: tempUser.id },
+              data: {
+                telegramId: null
+              }
+            });
+          }
+          await tx.user.update({
+            where: { id: webUserId },
+            data: { telegramId: tgId }
+          });
+        });
+        await ctx.editMessageText(
+          "\u{1F389} <b>\u0410\u043A\u043A\u0430\u0443\u043D\u0442 \u0443\u0441\u043F\u0435\u0448\u043D\u043E \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D!</b>\n\n\u0422\u0435\u043F\u0435\u0440\u044C \u0432\u044B \u043C\u043E\u0436\u0435\u0442\u0435 \u0443\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u044C \u0437\u0430\u043A\u0430\u0437\u0430\u043C\u0438 \u0438 \u0431\u0430\u043B\u0430\u043D\u0441\u043E\u043C \u043F\u0440\u044F\u043C\u043E \u0447\u0435\u0440\u0435\u0437 Telegram-\u0431\u043E\u0442\u0430.",
+          { parse_mode: "HTML" }
+        ).catch(() => {
+        });
+        return ctx.reply("\u0413\u043B\u0430\u0432\u043D\u043E\u0435 \u043C\u0435\u043D\u044E:", {
+          ...import_telegraf7.Markup.keyboard([
+            ["\u{1F6CD} \u041A\u0430\u0442\u0430\u043B\u043E\u0433 \u0443\u0441\u043B\u0443\u0433", "\u{1F4E6} \u041C\u043E\u0438 \u0437\u0430\u043A\u0430\u0437\u044B"],
+            ["\u{1F4B0} \u041F\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u044C", "\u{1F464} \u041F\u0440\u043E\u0444\u0438\u043B\u044C"],
+            ["\u{1F198} \u041F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430", "\u{1F465} \u0420\u0435\u0444\u0435\u0440\u0430\u043B\u044B"]
+          ]).resize()
+        });
+      } catch (err) {
+        console.error("[Bot Auth Bind] Transaction failed:", err);
+        return ctx.editMessageText(
+          "\u274C <b>\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438\u0432\u044F\u0437\u043A\u0438</b>\n\n" + (err instanceof Error ? err.message : "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u0430\u043A\u043A\u0430\u0443\u043D\u0442. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0441\u043E\u0437\u0434\u0430\u0442\u044C \u043D\u043E\u0432\u0443\u044E \u0441\u0441\u044B\u043B\u043A\u0443 \u0432 \u043B\u0438\u0447\u043D\u043E\u043C \u043A\u0430\u0431\u0438\u043D\u0435\u0442\u0435."),
+          { parse_mode: "HTML" }
+        ).catch(() => {
+        });
+      }
+    });
+    bot.action("cancel_bind", async (ctx) => {
+      await ctx.answerCbQuery("\u041F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430").catch(() => {
+      });
+      return ctx.editMessageText(
+        "\u274C <b>\u041F\u0440\u0438\u0432\u044F\u0437\u043A\u0430 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0430 \u043E\u0442\u043C\u0435\u043D\u0435\u043D\u0430</b>\n\n\u0412\u0430\u0448 \u0442\u0435\u043A\u0443\u0449\u0438\u0439 \u043F\u0440\u043E\u0444\u0438\u043B\u044C Telegram \u0438 \u0431\u0430\u043B\u0430\u043D\u0441 \u0432 \u043F\u043E\u043B\u043D\u043E\u0439 \u0431\u0435\u0437\u043E\u043F\u0430\u0441\u043D\u043E\u0441\u0442\u0438.",
+        { parse_mode: "HTML" }
+      ).catch(() => {
+      });
     });
     bot.action("support", async (ctx) => {
       await ctx.answerCbQuery();

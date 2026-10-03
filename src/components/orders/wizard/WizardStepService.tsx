@@ -41,6 +41,9 @@ export function WizardStepService({
           <div>
             <h2 className="text-xl font-bold text-foreground">Шаг 3: Выберите тариф / услугу</h2>
             <p className="text-muted-foreground text-xs">{selectedNetwork?.name} — {selectedCategory?.name}</p>
+            {selectedCategory?.description && (
+              <p className="text-xs text-muted-foreground/80 mt-1 max-w-2xl">{selectedCategory.description}</p>
+            )}
           </div>
         </div>
       </div>

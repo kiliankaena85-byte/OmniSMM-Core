@@ -1,7 +1,6 @@
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { redis } from '@/lib/redis';
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const RATE_LIMIT_WINDOW_SECONDS = 3600; // 1 час
 const RATE_LIMIT_MAX_REQUESTS = 360; // 1 задача каждые 10 секунд при открытом окне
 
@@ -9,15 +8,25 @@ const RATE_LIMIT_MAX_REQUESTS = 360; // 1 задача каждые 10 секу�
  * Валидирует Telegram.WebApp.initData по HMAC-SHA256 (официальный алгоритм Telegram)
  * @see https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
  */
-function validateTelegramInitData(initData: string): {
+async function validateTelegramInitData(initData: string, tenantId?: string): Promise<{
   valid: boolean;
   telegramId?: string;
   username?: string;
   error?: string;
-} {
-  if (!BOT_TOKEN) {
-    // В dev-режиме принимаем без валидации для удобства разработки
-    if (process.env.NODE_ENV !== 'production') {
+}> {
+  let botToken = process.env.TELEGRAM_BOT_TOKEN || '';
+  if (tenantId) {
+    try {
+      const { tokenResolver } = await import('@/lib/telegram/token-resolver');
+      const resolved = await tokenResolver.resolveBotToken(tenantId);
+      if (resolved) botToken = resolved;
+    } catch {
+      // fallback to env
+    }
+  }
+
+  if (!botToken) {
+    if (process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_DEP_AUTH === 'true') {
       return { valid: true, telegramId: 'dev_user_12345', username: 'dev_user' };
     }
     return { valid: false, error: 'TELEGRAM_BOT_TOKEN не задан' };
@@ -35,11 +44,13 @@ function validateTelegramInitData(initData: string): {
       .map(([key, value]) => `${key}=${value}`)
       .join('\n');
 
-    // HMAC-SHA256: secret = HMAC-SHA256("WebAppData", BOT_TOKEN), data = checkString
-    const secretKey = createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    // HMAC-SHA256: secret = HMAC-SHA256("WebAppData", botToken), data = checkString
+    const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest();
     const expectedHash = createHmac('sha256', secretKey).update(checkString).digest('hex');
 
-    if (expectedHash !== hash) {
+    const expectedBuf = Buffer.from(expectedHash, 'hex');
+    const actualBuf = Buffer.from(hash, 'hex');
+    if (expectedBuf.length !== actualBuf.length || !timingSafeEqual(expectedBuf, actualBuf)) {
       return { valid: false, error: 'INVALID_SIGNATURE' };
     }
 
@@ -83,7 +94,8 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const validation = validateTelegramInitData(initData);
+    const tenantId = request.headers.get('x-tenant-id') || undefined;
+    const validation = await validateTelegramInitData(initData, tenantId);
     if (!validation.valid) {
       return Response.json(
         { success: false, error: validation.error || 'INVALID_INITDATA' },

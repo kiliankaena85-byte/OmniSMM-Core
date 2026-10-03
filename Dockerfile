@@ -19,6 +19,10 @@ COPY --chown=nextjs:nodejs node_modules/prisma ./node_modules/prisma
 COPY --chown=nextjs:nodejs node_modules/nodemailer ./node_modules/nodemailer
 
 
+# Copy cluster runner & microcache engine
+COPY --chown=nextjs:nodejs scripts/cluster-server.js ./cluster-server.js
+COPY --chown=nextjs:nodejs scripts/microcache-engine.js ./microcache-engine.js
+
 # Entrypoint (prisma migrate deploy перед стартом)
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./
 RUN dos2unix docker-entrypoint.sh && chmod +x docker-entrypoint.sh
@@ -31,7 +35,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
 
 ENTRYPOINT ["/bin/sh", "./docker-entrypoint.sh"]
-CMD ["node", "server.js"]
+CMD ["node", "cluster-server.js"]
 
 # --- worker-runner ---
 FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS worker-runner

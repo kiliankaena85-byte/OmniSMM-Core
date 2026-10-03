@@ -283,7 +283,7 @@ export default async function ClientDetailPage({ params }: Props) {
       balance: Number(user.balance),
       quarantineBalance: Number(user.quarantineBalance),
       totalSpent: Number(user.totalSpent),
-      referralBalance: user.referralBalance,
+      referralBalance: Number(user.referralBalance),
     } : {}),
   };
 
@@ -414,7 +414,7 @@ export default async function ClientDetailPage({ params }: Props) {
           { label: 'Баланс', value: canSeeFinances ? formatBalance(user.balance) : '🔒 *** ₽', accent: 'text-foreground', note: (canSeeFinances && user.quarantineBalance > 0) ? `🔒 ${formatBalance(user.quarantineBalance)} эскроу` : null },
           { label: 'LTV (Потрачено)', value: canSeeFinances ? formatBalance(user.totalSpent) : '🔒 *** ₽', accent: 'text-success', note: 'Заказы − Возвраты' },
           { label: 'Заказов', value: ordersCount.toString(), accent: 'text-foreground', note: `${ticketsCount} тикетов` },
-          { label: 'Реф. баланс', value: canSeeFinances ? formatBalance(user.referralBalance) : '🔒 *** ₽', accent: 'text-violet-600', note: user.referralCode ? `Код: ${user.referralCode}` : 'Нет кода' },
+          { label: user.referralBalance < BigInt(0) ? 'Реф. долг' : 'Реф. баланс', value: canSeeFinances ? formatBalance(user.referralBalance) : '🔒 *** ₽', accent: user.referralBalance < BigInt(0) ? 'text-amber-600' : 'text-violet-600', note: user.referralBalance < BigInt(0) ? 'Отзыв комиссии — гасится будущими начислениями' : (user.referralCode ? `Код: ${user.referralCode}` : 'Нет кода') },
         ].map(s => (
           <div key={s.label} className="bg-card/60 backdrop-blur-md border border-border/50 shadow-sm rounded-2xl p-5 transition-all hover:shadow-md hover:border-border flex flex-col justify-between">
             <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground mb-1">{s.label}</div>

@@ -43,13 +43,23 @@ async function restoreDatabase() {
 
   console.log('🐳 Found active container: smmplan_lite_db. Piping dump via psql...\n');
 
-  try {
-    const fileStream = fs.createReadStream(targetBackup);
+    // 1. Detect and normalize encoding (convert UTF-16 LE to UTF-8, strip BOM)
+    let buffer = fs.readFileSync(targetBackup);
+    if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+      console.log('🔄 Detected UTF-16 LE encoding. Converting to UTF-8...');
+      const text = buffer.toString('utf16le');
+      buffer = Buffer.from(text, 'utf8');
+    } else if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+      console.log('🔄 Detected UTF-8 BOM. Stripping BOM...');
+      buffer = buffer.slice(3);
+    }
+
     const psqlProcess = spawn('docker', ['exec', '-i', 'smmplan_lite_db', 'psql', '-U', 'postgres', '-d', 'smmplan_lite'], {
       stdio: ['pipe', 'inherit', 'inherit'],
     });
 
-    fileStream.pipe(psqlProcess.stdin);
+    psqlProcess.stdin.write(buffer);
+    psqlProcess.stdin.end();
 
     await new Promise<void>((resolve, reject) => {
       psqlProcess.on('close', (code) => {
@@ -64,13 +74,24 @@ async function restoreDatabase() {
 
     console.log('\n✅ [DB Restore] SQL dump applied successfully!');
 
-    // Verify table counts
-    console.log('🔍 Verifying restored database tables...');
-    const tableVerify = execSync(
-      'docker exec smmplan_lite_db psql -U postgres -d smmplan_lite -c "SELECT count(*) FROM \\"Tenant\\";"',
+    // 2. Grant permissions to app_user for RLS multi-tenant security
+    console.log('🔐 Ensuring app_user permissions on public schema...');
+    execSync(
+      'docker exec smmplan_lite_db psql -U postgres -d smmplan_lite -c ' +
+      '"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO app_user; ' +
+      'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO app_user; ' +
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO app_user; ' +
+      'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO app_user;"',
       { encoding: 'utf-8' }
     );
-    console.log(tableVerify.trim());
+
+    // 3. Verify table counts
+    console.log('🔍 Verifying restored database tables...');
+    const catVerify = execSync(
+      'docker exec smmplan_lite_db psql -U postgres -d smmplan_lite -c "SELECT count(*) AS categories FROM \\"Category\\";"',
+      { encoding: 'utf-8' }
+    );
+    console.log(catVerify.trim());
 
     console.log('🟢 [DB Restore COMPLETE] Database is fully restored to golden state.');
   } catch (err) {

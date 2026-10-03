@@ -26,28 +26,12 @@ export class GatewaysAvailabilityService {
       secrets.yookassaSecretKey &&
       secrets.yookassaShopId.trim().length > 0 &&
       secrets.yookassaSecretKey.trim().length > 0 &&
-      secrets.yookassaShopId !== 'test_shop_id' &&
-      secrets.yookassaShopId !== 'test_shop_id_test' &&
-      secrets.yookassaSecretKey !== 'test_secret' &&
-      secrets.yookassaSecretKey !== 'test_secret_key'
-    );
-
-    const hasValidRobokassa = Boolean(
-      secrets.robokassaLogin &&
-      secrets.robokassaPassword &&
-      secrets.robokassaLogin.trim().length > 0 &&
-      secrets.robokassaPassword.trim().length > 0 &&
-      secrets.robokassaLogin !== 'test_login'
-    );
-
-    const hasValidCryptoBot = Boolean(
-      secrets.cryptoBotToken &&
-      secrets.cryptoBotToken.trim().length > 0 &&
-      secrets.cryptoBotToken !== 'test_token' &&
-      secrets.cryptoBotToken !== 'test_bot_token' &&
-      secrets.cryptoBotToken !== 'test_login' &&
-      !secrets.cryptoBotToken.startsWith('test_dummy') &&
-      !secrets.cryptoBotToken.startsWith('test_')
+      (isTest || (
+        secrets.yookassaShopId !== 'test_shop_id' &&
+        secrets.yookassaShopId !== 'test_shop_id_test' &&
+        secrets.yookassaSecretKey !== 'test_secret' &&
+        secrets.yookassaSecretKey !== 'test_secret_key'
+      ))
     );
 
     const legalDetails = await SettingsProvider.getContactAndLegalSettings(resolvedTenantId);
@@ -57,11 +41,12 @@ export class GatewaysAvailabilityService {
       legalDetails.LEGAL_INN.trim().length >= 10
     );
 
+    // SPEC-TESTER-INVITES-2026 (INV-TESTER-05): YooKassa-exclusive gateway in current testing phase
     return {
       yookassa: hasValidYookassa,
       sbp: false,
-      robokassa: hasValidRobokassa,
-      cryptobot: hasValidCryptoBot,
+      robokassa: false,
+      cryptobot: false,
       api: hasValidApi,
       isTestMode: isTest
     };

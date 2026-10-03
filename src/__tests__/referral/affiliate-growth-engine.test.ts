@@ -163,14 +163,14 @@ describe('💎 Affiliate Growth Engine 2.0 Master Suite', () => {
 
       // Confirm commission
       const beforeUser = await db.user.findUnique({ where: { id: rootAffiliateId } });
-      const beforeRefBal = beforeUser?.referralBalance ?? 0;
+      const beforeRefBal = beforeUser?.referralBalance ?? BigInt(0);
 
       await db.$transaction(async (tx) => {
         await LoyaltyService.confirmCommission(tx, orderId);
       });
 
       const afterUser = await db.user.findUnique({ where: { id: rootAffiliateId } });
-      expect(afterUser?.referralBalance).toBe(beforeRefBal + 5000);
+      expect(afterUser?.referralBalance).toBe(beforeRefBal + BigInt(5000));
 
       const confirmedComm = await db.commission.findUnique({ where: { id: comm!.id } });
       expect(confirmedComm?.status).toBe('CONFIRMED');

@@ -201,5 +201,91 @@ export class RateLimitService {
     const detail = await this.checkCustomKeyDetail(key, maxHits, windowSeconds, failClosed);
     return detail.allowed;
   }
+
+  /**
+   * Dual-Tier Multi-Tenant Bulkhead Rate Limiter (BGS-2026 / RFC 9331).
+   * Level 1: Global Tenant Bulkhead (prevents botnet/DDoS from overwhelming shared core)
+   * Level 2: Per-Tenant IP Limiter (prevents single-client spam)
+   */
+  static async checkDualTierRateLimit(options: DualTierRateLimitOptions): Promise<DualTierRateLimitResult> {
+    const {
+      tenantId,
+      ip,
+      endpoint,
+      ipLimit,
+      ipWindowSeconds = 60,
+      tenantLimit,
+      tenantWindowSeconds = 60,
+      failClosed = true,
+    } = options;
+
+    // 1. Level 1: Global Tenant Bulkhead check
+    const tenantBulkheadKey = `sf_bulkhead_tenant_${tenantId}_${endpoint}`;
+    const tenantInfo = await this.checkCustomKeyDetail(
+      tenantBulkheadKey,
+      tenantLimit,
+      tenantWindowSeconds,
+      failClosed
+    );
+
+    if (!tenantInfo.allowed) {
+      console.warn(`[RATE_LIMIT:BULKHEAD] Tenant capacity exceeded for tenant ${tenantId} on ${endpoint}`);
+      return {
+        allowed: false,
+        blockedBy: 'TENANT_BULKHEAD',
+        limit: tenantLimit,
+        remaining: 0,
+        resetSeconds: tenantInfo.resetSeconds,
+      };
+    }
+
+    // 2. Level 2: Per-Tenant IP check
+    const ipKey = `sf_ratelimit_${tenantId}_${endpoint}_${ip}`;
+    const ipInfo = await this.checkCustomKeyDetail(
+      ipKey,
+      ipLimit,
+      ipWindowSeconds,
+      failClosed
+    );
+
+    if (!ipInfo.allowed) {
+      console.warn(`[RATE_LIMIT:IP] IP rate limit exceeded for ${ip} on tenant ${tenantId}:${endpoint}`);
+      return {
+        allowed: false,
+        blockedBy: 'IP',
+        limit: ipLimit,
+        remaining: 0,
+        resetSeconds: ipInfo.resetSeconds,
+      };
+    }
+
+    return {
+      allowed: true,
+      blockedBy: 'NONE',
+      limit: ipLimit,
+      remaining: ipInfo.remaining,
+      resetSeconds: ipInfo.resetSeconds,
+    };
+  }
 }
+
+export interface DualTierRateLimitResult {
+  allowed: boolean;
+  blockedBy: 'NONE' | 'IP' | 'TENANT_BULKHEAD';
+  limit: number;
+  remaining: number;
+  resetSeconds: number;
+}
+
+export interface DualTierRateLimitOptions {
+  tenantId: string;
+  ip: string;
+  endpoint: string;
+  ipLimit: number;
+  ipWindowSeconds?: number;
+  tenantLimit: number;
+  tenantWindowSeconds?: number;
+  failClosed?: boolean;
+}
+
 

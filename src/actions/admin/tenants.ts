@@ -177,23 +177,40 @@ export async function createTenantAction(formData: z.infer<typeof CreateTenantSc
 
               if (cat.services && cat.services.length > 0) {
                 await tx.service.createMany({
-                  data: cat.services.map((s) => ({
-                    name: s.name,
-                    description: s.description,
-                    icon: s.icon,
-                    features: s.features ?? undefined,
-                    categoryId: newCat.id,
-                    tenantId: cleanSlug,
-                    providerId: s.providerId,
-                    externalId: s.externalId,
-                    rate: Math.round(s.rate * multiplier * 100) / 100,
-                    costPer1kRub: s.costPer1kRub ? Math.round(s.costPer1kRub * multiplier * 100) / 100 : Math.round(s.rate * multiplier * 100) / 100,
-                    providerCurrency: s.providerCurrency,
-                    minQty: s.minQty,
-                    maxQty: s.maxQty,
-                    isActive: s.isActive,
-                    sortOrder: s.sortOrder,
-                  })),
+                  data: cat.services.map((s) => {
+                    const baseRetailCents = s.pricePer1000Cents && s.pricePer1000Cents > 0
+                      ? s.pricePer1000Cents
+                      : Math.round(((s.costPer1kRub || s.rate) * (s.markup || 8.0)) * 100);
+                    const targetPricePer1000Cents = Math.round(baseRetailCents * multiplier);
+
+                    return {
+                      name: s.name,
+                      description: s.description,
+                      icon: s.icon,
+                      features: s.features ?? undefined,
+                      categoryId: newCat.id,
+                      tenantId: cleanSlug,
+                      providerId: s.providerId,
+                      externalId: s.externalId,
+                      rate: s.rate,
+                      costPer1kRub: s.costPer1kRub || s.rate,
+                      providerCurrency: s.providerCurrency,
+                      markup: s.markup ? Math.round(s.markup * multiplier * 100) / 100 : 8.0,
+                      pricePer1000Cents: targetPricePer1000Cents,
+                      slug: s.slug ? `${s.slug}-${cleanSlug}` : null,
+                      minQty: s.minQty,
+                      maxQty: s.maxQty,
+                      isActive: s.isActive,
+                      sortOrder: s.sortOrder,
+                      isDripFeedEnabled: s.isDripFeedEnabled,
+                      isRefillEnabled: s.isRefillEnabled,
+                      isCancelEnabled: s.isCancelEnabled,
+                      targetType: s.targetType,
+                      customDataType: s.customDataType,
+                      customDataLabel: s.customDataLabel,
+                      qualityTier: s.qualityTier,
+                    };
+                  }),
                 });
               }
             }

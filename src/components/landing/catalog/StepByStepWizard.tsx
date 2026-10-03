@@ -19,6 +19,8 @@ export function StepByStepWizard({
     service: CatalogServiceItem;
     targetUrl: string;
     quantity: number;
+    runs?: number;
+    customData?: string;
     paymentMethod: string;
   }) => void;
   userBalanceCents?: number;
@@ -32,6 +34,7 @@ export function StepByStepWizard({
 
   // Step 4 Form State
   const [targetUrl, setTargetUrl] = useState('');
+  const [customData, setCustomData] = useState('');
   const [quantity, setQuantity] = useState(500);
   const [runs, setRuns] = useState(1);
   const [dripFeedEnabled, setDripFeedEnabled] = useState(false);
@@ -107,6 +110,7 @@ export function StepByStepWizard({
       quantity,
       // Pass runs if Drip-Feed is active
       ...(dripFeedEnabled ? { runs } : {}),
+      customData: customData ? customData.trim() : undefined,
       paymentMethod,
     });
   };
@@ -162,6 +166,8 @@ export function StepByStepWizard({
               availableGateways={availableGateways}
               userBalanceCents={userBalanceCents}
               totalPrice={totalPrice}
+              customData={customData}
+              setCustomData={setCustomData}
               onBack={() => setCurrentStep(3)}
               onSubmit={handleSubmitOrder}
             />

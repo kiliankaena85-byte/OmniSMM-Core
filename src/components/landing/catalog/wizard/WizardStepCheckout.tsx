@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Sparkles } from 'lucide-react';
 import { detectMismatchedNetwork } from '@/utils/social-link-placeholder';
 import { CatalogPlatform, CatalogCategory, CatalogServiceItem } from '../catalog-data';
 import { WizardPaymentGateways, type PaymentMethodType } from './WizardPaymentGateways';
@@ -35,6 +35,8 @@ interface WizardStepCheckoutProps {
   availableGateways: GatewaysConfig | null;
   userBalanceCents: number;
   totalPrice: string;
+  customData?: string;
+  setCustomData?: (val: string) => void;
   onBack: () => void;
   onSubmit: () => void;
 }
@@ -56,11 +58,23 @@ export function WizardStepCheckout({
   availableGateways,
   userBalanceCents,
   totalPrice,
+  customData,
+  setCustomData,
   onBack,
   onSubmit,
 }: WizardStepCheckoutProps) {
   const mismatch = detectMismatchedNetwork(targetUrl, platform.id);
   const { isValid: isLinkValid, error: linkError } = validateOrderLink(targetUrl, platform.id);
+
+  const customDataType = service.customDataType || (
+    service.title.toLowerCase().includes('комментар')
+      ? 'TEXTAREA'
+      : (service.title.toLowerCase().includes('опрос') || service.title.toLowerCase().includes('голосован'))
+        ? 'NUMBER'
+        : 'NONE'
+  );
+
+  const isCustomDataValid = customDataType === 'NONE' || Boolean(customData && customData.trim().length > 0);
 
   const parsedMin = parseInt(service.minMax.match(/\d[\d\s]*\b/)?.[0]?.replace(/\s/g, '') || '100', 10);
   const parsedMaxMatch = service.minMax.match(/—\s*(\d[\d\s]*)\b/);
@@ -68,7 +82,7 @@ export function WizardStepCheckout({
 
   // Drip-Feed Floor Invariant: Q/N >= minQty
   const isDripFeedValid = !dripFeedEnabled || (Math.floor(quantity / runs) >= parsedMin);
-  const canSubmit = Boolean(targetUrl && isLinkValid && !mismatch.isMismatch && isDripFeedValid);
+  const canSubmit = Boolean(targetUrl && isLinkValid && !mismatch.isMismatch && isDripFeedValid && isCustomDataValid);
 
   return (
     <motion.div
@@ -109,6 +123,46 @@ export function WizardStepCheckout({
           linkError={linkError}
           mismatch={mismatch}
         />
+
+        {/* Дополнительные параметры (комментарии / опрос) */}
+        {customDataType !== 'NONE' && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-primary" />
+                <span>{service.customDataLabel || (customDataType === 'TEXTAREA' ? 'Текст комментариев' : 'Номер варианта ответа')}</span>
+                <span className="text-destructive">*</span>
+              </label>
+            </div>
+            {customDataType === 'TEXTAREA' ? (
+              <textarea
+                rows={3}
+                value={customData || ''}
+                onChange={(e) => setCustomData?.(e.target.value)}
+                placeholder={service.customDataPlaceholder || "Каждый комментарий с новой строки..."}
+                className="w-full px-4 py-3 text-sm bg-background border border-border/60 rounded-2xl text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all resize-y"
+              />
+            ) : (
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={customData || ''}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '');
+                  setCustomData?.(val);
+                }}
+                placeholder={service.customDataPlaceholder || "Например: 1 (номер варианта в опросе)"}
+                className="w-full px-4 py-3 text-sm bg-background border border-border/60 rounded-2xl text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all"
+              />
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              {customDataType === 'TEXTAREA'
+                ? 'Напишите текст: каждая новая строка будет отправлена как отдельный комментарий'
+                : 'Укажите порядковый номер варианта ответа (например: 1 для первого варианта, 2 для второго)'}
+            </p>
+          </div>
+        )}
 
         {/* Количество */}
         <div>

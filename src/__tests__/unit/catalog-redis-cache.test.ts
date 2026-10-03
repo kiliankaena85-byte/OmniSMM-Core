@@ -127,4 +127,45 @@ describe('Multi-Tenant Redis Catalog Cache Service (TDD)', () => {
     await getCachedCategoryServicesWithRedis('cat-1', 'smmplan', fetcher);
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it('should serve from L1 in-memory cache without hitting Redis on subsequent calls', async () => {
+    const fetcher = vi.fn().mockResolvedValue(mockNetworksSmmplan);
+    const redisGetSpy = vi.spyOn(redis, 'get');
+
+    // Call 1: Populates L1 and Redis
+    const res1 = await getCachedNetworksWithRedis('smmplan', fetcher);
+    expect(res1).toEqual(mockNetworksSmmplan);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    const redisCallsAfterFirst = redisGetSpy.mock.calls.length;
+
+    // Call 2: Must be served from L1 In-Memory cache (0 Redis gets, 0 fetcher calls)
+    const res2 = await getCachedNetworksWithRedis('smmplan', fetcher);
+    expect(res2).toEqual(mockNetworksSmmplan);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(redisGetSpy.mock.calls.length).toBe(redisCallsAfterFirst); // No new Redis get!
+  });
+
+  it('isolates L1 catalog cache between tenants during invalidation', async () => {
+    const fetcherA = vi.fn().mockResolvedValue([{ id: 'net-a' }]);
+    const fetcherB = vi.fn().mockResolvedValue([{ id: 'net-b' }]);
+
+    // Warm both
+    await getCachedNetworksWithRedis('smmplan', fetcherA);
+    await getCachedNetworksWithRedis('flux', fetcherB);
+    expect(fetcherA).toHaveBeenCalledTimes(1);
+    expect(fetcherB).toHaveBeenCalledTimes(1);
+
+    // Invalidate only smmplan
+    await invalidateCatalogCache('smmplan');
+
+    // smmplan must be a miss
+    await getCachedNetworksWithRedis('smmplan', fetcherA);
+    expect(fetcherA).toHaveBeenCalledTimes(2);
+
+    // flux must still be served from L1 (no new fetcher call)
+    await getCachedNetworksWithRedis('flux', fetcherB);
+    expect(fetcherB).toHaveBeenCalledTimes(1);
+  });
 });
+

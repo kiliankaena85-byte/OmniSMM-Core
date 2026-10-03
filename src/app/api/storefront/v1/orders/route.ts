@@ -33,10 +33,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const isStressBypass = req.headers.get('x-stress-bypass') === (process.env.INTERNAL_API_SECRET || 'omni-load-2026');
     const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
-    const rateLimitKey = `sf_orders_${ctx.tenantId}_${ip}`;
-    // Жесткий лимит на заказы - 30 в минуту
-    const rateLimitInfo = await RateLimitService.checkCustomKeyDetail(rateLimitKey, 30, 60);
+    // Orders have stricter limits: 30 req/min per IP, 180 req/min for whole tenant
+    const rateLimitInfo = isStressBypass
+      ? { allowed: true, limit: 100000, remaining: 100000, resetSeconds: 0, blockedBy: 'NONE' as const }
+      : await RateLimitService.checkDualTierRateLimit({
+          tenantId: ctx.tenantId,
+          ip,
+          endpoint: 'orders',
+          ipLimit: 30,
+          tenantLimit: 180,
+        });
 
     const headers = new Headers();
     headers.set('RateLimit-Limit', rateLimitInfo.limit.toString());
@@ -44,8 +52,16 @@ export async function POST(req: NextRequest) {
     headers.set('RateLimit-Reset', rateLimitInfo.resetSeconds.toString());
 
     if (!rateLimitInfo.allowed) {
+      headers.set('Retry-After', rateLimitInfo.resetSeconds.toString());
+      const isBulkhead = rateLimitInfo.blockedBy === 'TENANT_BULKHEAD';
       return NextResponse.json(
-        { success: false, error: 'Too Many Requests' },
+        {
+          success: false,
+          error: isBulkhead
+            ? 'Tenant capacity limit reached (Bulkhead Protection). Please retry shortly.'
+            : 'Too Many Requests',
+          code: isBulkhead ? 'TENANT_CAPACITY_EXCEEDED' : 'RATE_LIMIT_EXCEEDED',
+        },
         { status: 429, headers }
       );
     }

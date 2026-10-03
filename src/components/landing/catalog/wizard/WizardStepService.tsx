@@ -36,6 +36,11 @@ export function WizardStepService({
           <p className="text-xs sm:text-sm text-muted-foreground">
             {platform.name} • {category.title}
           </p>
+          {category.description && (
+            <p className="text-xs text-muted-foreground/80 mt-1 max-w-xl">
+              {category.description}
+            </p>
+          )}
         </div>
         <button
           type="button"

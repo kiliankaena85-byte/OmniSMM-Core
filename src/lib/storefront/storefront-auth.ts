@@ -28,15 +28,64 @@ export async function resolveStorefrontContext(req: NextRequest): Promise<Storef
     }
   }
 
-  // 3. Fallback: аутентификация по кастомному домену (investor-store.ru)
+  // 3. Fallback: аутентификация по валидированному x-tenant-id (из proxy.ts)
+  const verifiedTenantId = req.headers.get('x-tenant-id');
+  if (verifiedTenantId) {
+    const tenant = await db.tenant.findUnique({
+      where: { slug: verifiedTenantId },
+    });
+    if (tenant && tenant.isActive) {
+      return {
+        tenantId: tenant.id,
+        tenantSlug: tenant.slug,
+        tenantName: tenant.name,
+        keyType: 'publishable',
+        rateLimit: 120,
+      };
+    }
+  }
+
+  // 4. Fallback: аутентификация по кастомному домену (investor-store.ru) или домену платформы (smmplan / flux)
   // Применима только для публичных запросов (keyType = publishable)
-  const host = req.headers.get('host') || '';
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || '';
   if (host) {
     // Учитываем порты в dev окружении
     const domain = host.split(':')[0].toLowerCase();
     
-    // Исключаем локальные и стандартные домены платформы из fallback (должны использовать ключи)
-    if (!domain.includes('localhost') && !domain.includes('127.0.0.1') && !domain.includes('smmplan') && !domain.includes('smmflux')) {
+    // Платформенные домены SMMplan (smmplan.pro, smmplan.tail*.ts.net, etc.) или локальный origin (localhost / 127.0.0.1)
+    if (domain.includes('smmplan') || domain === 'localhost' || domain === '127.0.0.1' || domain === '0.0.0.0') {
+      const tenant = await db.tenant.findUnique({
+        where: { slug: 'smmplan' },
+      });
+      if (tenant && tenant.isActive) {
+        return {
+          tenantId: tenant.id,
+          tenantSlug: tenant.slug,
+          tenantName: tenant.name,
+          keyType: 'publishable',
+          rateLimit: 120,
+        };
+      }
+    }
+
+    // Платформенные домены SMMflux (smmflux.ru, etc.)
+    if (domain.includes('smmflux') || domain.includes('flux')) {
+      const tenant = await db.tenant.findUnique({
+        where: { slug: 'flux' },
+      });
+      if (tenant && tenant.isActive) {
+        return {
+          tenantId: tenant.id,
+          tenantSlug: tenant.slug,
+          tenantName: tenant.name,
+          keyType: 'publishable',
+          rateLimit: 120,
+        };
+      }
+    }
+
+    // Кастомный домен инвестора (investor-store.ru)
+    if (!domain.includes('localhost') && !domain.includes('127.0.0.1')) {
       const tenant = await db.tenant.findUnique({
         where: { customDomain: domain },
       });

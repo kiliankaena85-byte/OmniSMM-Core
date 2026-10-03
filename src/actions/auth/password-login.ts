@@ -277,7 +277,10 @@ export async function loginWithPasswordAction(prevState: unknown, formData: Form
 
     // Determine redirect path
     let redirectTo = '/dashboard';
-    if (["OWNER", "ADMIN", "MANAGER", "SUPPORT"].includes(user.role)) {
+    const redirectParam = formData.get('redirect')?.toString();
+    if (redirectParam && redirectParam.startsWith('/') && !redirectParam.startsWith('//') && !redirectParam.includes('\\')) {
+      redirectTo = redirectParam;
+    } else if (["OWNER", "ADMIN", "MANAGER", "SUPPORT"].includes(user.role)) {
       redirectTo = '/admin/dashboard';
     } else if (tenantId === 'flux' || user.tenantId === 'flux') {
       redirectTo = '/dashboard?tenant=flux';

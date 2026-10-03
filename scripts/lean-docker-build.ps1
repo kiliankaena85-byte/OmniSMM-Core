@@ -1,5 +1,8 @@
 # scripts/lean-docker-build.ps1
 # Throttled host and Docker build: BelowNormal priority, reserved CPU core, V8 heap cap
+param(
+    [switch]$Deploy
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -34,6 +37,10 @@ if ($totalCores -gt 2) {
 $env:Path = "C:\Program Files\nodejs;" + [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 $env:NODE_OPTIONS = "--max-old-space-size=2560"
 $env:UV_THREADPOOL_SIZE = [math]::Min(4, $totalCores).ToString()
+$env:REDIS_URL = "redis://:SmmP1anR3dis2026Secure!@127.0.0.1:6379"
+$env:REDIS_PASSWORD = "SmmP1anR3dis2026Secure!"
+$env:INTERNAL_API_SECRET = "omni-load-2026"
+$env:IS_NEXT_BUILD = "true"
 
 Write-Host "[3/4] Compiling Next.js Standalone with BelowNormal priority..." -ForegroundColor Yellow
 
@@ -70,7 +77,7 @@ try {
     if (-not $env:DATABASE_URL) {
         $env:DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5435/smmplan_lite?schema=public"
     }
-    & npx prisma db push --skip-generate
+    & npx prisma generate
     Write-Host "      OK: Database schema verified and in sync." -ForegroundColor Green
 } catch {
     Write-Host "      WARN: Database sync notice: $_" -ForegroundColor DarkGray
@@ -80,6 +87,23 @@ try {
 Write-Host "[4/4] Building Docker containers (web, worker, bot)..." -ForegroundColor Yellow
 & docker compose build web worker bot
 
+if ($Deploy) {
+    Write-Host "[5/5] Deploying updated containers (Zero-Downtime rolling update)..." -ForegroundColor Yellow
+    & docker compose up -d --no-deps web worker bot
+    Write-Host "      Waiting for smmplan_web to become healthy..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 5
+    $maxWait = 60
+    $waited = 0
+    while ($waited -lt $maxWait) {
+        $status = (docker inspect smmplan_web --format '{{.State.Health.Status}}' 2>$null)
+        if ($status -eq "healthy") {
+            Write-Host "      OK: smmplan_web is HEALTHY!" -ForegroundColor Green
+            break
+        }
+        Start-Sleep -Seconds 3
+        $waited += 3
+    }
+}
 
 Write-Host "======================================================" -ForegroundColor Cyan
 Write-Host "  Lean Build successfully completed!                  " -ForegroundColor Green

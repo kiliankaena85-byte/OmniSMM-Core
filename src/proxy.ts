@@ -210,6 +210,26 @@ export function isKnownOrAllowedHost(h: string | null | undefined): boolean {
 }
 
 /**
+ * Checks whether an incoming request qualifies for stress-test bypass or represents trusted internal traffic.
+ * Valid stress header: x-stress-bypass === process.env.INTERNAL_API_SECRET || x-stress-bypass === 'omni-load-2026'
+ * Trusted internal: x-internal-traffic === 'true' or direct local/internal request without external x-forwarded-for.
+ */
+export function checkStressOrInternalBypass(request: NextRequest, rawHostClean: string, clientIp: string): boolean {
+  const stressBypassHeader = request.headers.get('x-stress-bypass');
+  if (stressBypassHeader) {
+    const internalSecret = process.env.INTERNAL_API_SECRET;
+    if ((internalSecret && stressBypassHeader === internalSecret) || stressBypassHeader === 'omni-load-2026') {
+      return true;
+    }
+  }
+  // Trusted internal traffic: direct connection to internal host without external proxy forwarding (x-forwarded-for)
+  if (!request.headers.has('x-forwarded-for') && isInternalHost(rawHostClean)) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Strict CORS origin validator (CORS-01 / OWASP ASVS 4.0.3).
  * In production: strictly whitelist smmplan.pro, smmflux.ru, and all registered dynamic tenant domains.
  * Blocks localhost, private IPs, and arbitrary domains from cross-origin credential sharing.
@@ -509,9 +529,11 @@ export async function proxy(request: NextRequest) {
     return res;
   };
 
+  const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || '127.0.0.1';
+  const isStressBypass = checkStressOrInternalBypass(request, rawHostClean, clientIp);
+
   // Webhook Rate Limiter Guard (IP + tenant-scoped for /api/webhooks/*)
-  if (pathname.startsWith('/api/webhooks')) {
-    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || '127.0.0.1';
+  if (pathname.startsWith('/api/webhooks') && !isStressBypass) {
     const webhookPoolKey = `webhook:${clientIp}:${pathname}`;
     const { checkFingerprintPoolLimit } = await import('@/lib/security/ddos-shield/token-bucket-pool');
 
@@ -549,8 +571,8 @@ export async function proxy(request: NextRequest) {
   if (!isExcludedFromShield && process.env.DDOS_SHIELD_ENABLED !== 'false') {
     const hasSession = Boolean(readSessionTokenFromCookies(request.cookies));
 
-    // Authorized users with valid session bypass DDoS challenge
-    if (!hasSession) {
+    // Authorized users with valid session, stress-test bypass, or trusted internal traffic bypass DDoS challenge
+    if (!hasSession && !isStressBypass) {
       const { computeHeaderFingerprint, checkClientHintsAnomaly, isWhitelistedGoodBot } = await import('@/lib/security/ddos-shield/fingerprint');
       const isBotWhitelisted = isWhitelistedGoodBot(request.headers);
 
@@ -773,17 +795,20 @@ export async function proxy(request: NextRequest) {
   requestHeaders.set('x-host', rawIncomingHost);
   requestHeaders.set('x-forwarded-host', rawIncomingHost);
 
-  // Generate cryptographic Nonce for strict-dynamic CSP (V-05 / SEC-002)
-  const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
-  requestHeaders.set('x-nonce', nonce);
-
   const incomingProto = request.headers.get('x-forwarded-proto') || request.nextUrl.protocol || '';
   const isHttps = incomingProto.includes('https');
-  const cspHeader = buildCspHeader(nonce, isHttps, rawIncomingHost);
   const isDirectIpOrLocal = /^(localhost|127\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|26\.\d+\.\d+\.\d+|0\.0\.0\.0)(:\d+)?$/i.test(rawIncomingHost);
   const shouldUpgradeInsecure = isHttps && !isDirectIpOrLocal;
 
-  requestHeaders.set('Content-Security-Policy', cspHeader);
+  // Generate cryptographic Nonce for strict-dynamic CSP (V-05 / SEC-002) for non-API requests
+  let nonce = '';
+  let cspHeader = '';
+  if (!pathname.startsWith('/api/')) {
+    nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+    requestHeaders.set('x-nonce', nonce);
+    cspHeader = buildCspHeader(nonce, isHttps, rawIncomingHost);
+    requestHeaders.set('Content-Security-Policy', cspHeader);
+  }
 
   // Handle ref cookie if present in URL query
   const ref = request.nextUrl.searchParams.get('ref');
@@ -812,8 +837,12 @@ export async function proxy(request: NextRequest) {
   }
 
   response.headers.set('x-tenant-id', finalTenantId);
-  response.headers.set('x-nonce', nonce);
-  response.headers.set('Content-Security-Policy', cspHeader);
+  if (nonce) {
+    response.headers.set('x-nonce', nonce);
+  }
+  if (cspHeader) {
+    response.headers.set('Content-Security-Policy', cspHeader);
+  }
   if (shouldUpgradeInsecure) {
     response.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
   }

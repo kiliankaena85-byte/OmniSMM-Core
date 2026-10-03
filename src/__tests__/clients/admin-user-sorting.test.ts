@@ -205,7 +205,7 @@ describe('Admin User Dynamic Sorting & Deterministic Pagination (SPEC-2026-15)',
       expect(callArgs.where.AND).toBeDefined();
       expect(callArgs.where.AND.length).toBe(3);
 
-      // Baseline Condition: Soft-deletion check
+      // Condition 0: Soft-deletion check (isDeleted: false)
       expect(callArgs.where.AND[0]).toEqual({ isDeleted: false });
 
       // Condition 1: Search OR

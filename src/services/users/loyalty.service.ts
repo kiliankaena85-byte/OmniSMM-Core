@@ -241,7 +241,7 @@ export class LoyaltyService {
           comm.referrerId,
           commAmount,
           `Отзыв реферальной комиссии за отмену заказа ${orderId}`,
-          { tenantId, idempotencyKey: `ref_reversal_${comm.id}`, transactionType: 'REFERRAL_REVERSAL' }
+          { tenantId, idempotencyKey: `ref_reversal_${comm.id}`, transactionType: 'REFERRAL_REVERSAL', allowDebt: true }
         );
       }
 

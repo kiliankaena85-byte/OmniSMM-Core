@@ -235,7 +235,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -294,7 +295,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -477,7 +479,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -517,7 +520,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM"
@@ -1389,7 +1393,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM"
@@ -1444,7 +1449,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -2413,7 +2419,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM"
@@ -2912,7 +2919,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -3059,7 +3067,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -3108,7 +3117,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -3157,7 +3167,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -3309,7 +3320,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -3357,7 +3369,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "VK",
@@ -3406,7 +3419,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -3506,7 +3520,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM"
@@ -3602,7 +3617,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -3652,7 +3668,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -4100,7 +4117,8 @@
       "services",
       "add",
       "status",
-      "balance"
+      "balance",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -4149,7 +4167,8 @@
       "add",
       "status",
       "balance",
-      "cancel"
+      "cancel",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",
@@ -4252,7 +4271,8 @@
       "webhooks",
       "services",
       "add",
-      "status"
+      "status",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM"
@@ -4299,7 +4319,8 @@
       "balance",
       "services",
       "status",
-      "add"
+      "add",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM"
@@ -5000,7 +5021,8 @@
       "balance",
       "status",
       "services",
-      "add"
+      "add",
+      "refill"
     ],
     "primaryNetworks": [
       "YOUTUBE",
@@ -5050,7 +5072,8 @@
       "balance",
       "status",
       "services",
-      "add"
+      "add",
+      "refill"
     ],
     "primaryNetworks": [
       "TELEGRAM",

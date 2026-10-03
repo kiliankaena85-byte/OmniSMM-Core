@@ -17,11 +17,15 @@ export interface CatalogServiceItem {
   minMax: string;
   pricePerUnit: string;
   isPopular?: boolean;
+  customDataType?: 'NONE' | 'TEXTAREA' | 'NUMBER';
+  customDataLabel?: string;
+  customDataPlaceholder?: string;
 }
 
 export interface CatalogCategory {
   id: string;
   title: string;
+  description?: string;
   iconName?: string;
   services: CatalogServiceItem[];
 }

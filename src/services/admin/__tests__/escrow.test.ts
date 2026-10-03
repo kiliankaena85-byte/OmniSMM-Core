@@ -44,11 +44,12 @@ describe('EscrowService manual credit limits for OWNER and ADMIN', () => {
     expect(Number(updatedUser!.quarantineBalance)).toBe(0);
   });
 
-  it('should redirect balance adjustment above 100k RUB to QUARANTINE for OWNER', async () => {
+  // Policy (escrow.service.ts): anomaly threshold is 100k RUB for ADMIN, 10M RUB for OWNER
+  it('should redirect balance adjustment above 100k RUB to QUARANTINE for ADMIN', async () => {
     const admin = {
-      id: 'admin-owner-id',
-      email: 'owner@smmplan.test',
-      role: 'OWNER',
+      id: 'admin-admin-id',
+      email: 'admin@smmplan.test',
+      role: 'ADMIN',
       supportLimitCents: 1000000,
     };
 

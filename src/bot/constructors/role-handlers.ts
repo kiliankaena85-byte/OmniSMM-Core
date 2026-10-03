@@ -707,35 +707,60 @@ function setupStorePipeline(bot: Telegraf<BotContext>, opts: BotHandlerOptions):
       const bindToken = await db.authToken.findFirst({ where: { token: payload } });
       if (bindToken && !bindToken.used && bindToken.expiresAt > new Date()) {
         const webUserId = bindToken.userId;
-        try {
-          await db.$transaction(async (tx) => {
-            await tx.authToken.updateMany({ where: { id: bindToken.id, used: false }, data: { used: true } });
-            const tempUser = await tx.user.findFirst({ where: { telegramId: tgId, tenantId } });
-            if (tempUser && tempUser.id !== webUserId) {
-              await tx.ticket.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-              await tx.order.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-              await tx.payment.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
-              if (tempUser.balance > BigInt(0)) {
-                const amount = Number(tempUser.balance);
-                await WalletOps.charge(tx, tempUser.id, amount, `Слияние Telegram с ${webUserId}`, {
-                  idempotencyKey: `merge-debit-bot-${tempUser.id}-${webUserId}`
-                });
-                await WalletOps.credit(tx, webUserId, amount, `Перенос баланса с Telegram ${tempUser.email}`, {
-                  idempotencyKey: `merge-credit-bot-${tempUser.id}-${webUserId}`
-                });
-              }
-              await tx.user.update({ where: { id: tempUser.id }, data: { telegramId: null } });
-            }
-            await tx.user.update({ where: { id: webUserId }, data: { telegramId: tgId } });
-          });
-
-          return ctx.reply(
-            '🎉 <b>Аккаунт успешно привязан!</b>\n\nТеперь вы можете управлять заказами и балансом прямо через Telegram.',
-            { parse_mode: 'HTML', ...replyKeyboard }
-          );
-        } catch (err) {
-          console.error('[StorePipeline Bind] Error:', err);
+        const webUser = await db.user.findUnique({
+          where: { id: webUserId },
+          select: { id: true, email: true }
+        });
+        if (!webUser) {
+          return ctx.reply('❌ Ошибка: целевой аккаунт на сайте не найден.');
         }
+
+        const tempUser = await db.user.findFirst({ where: { telegramId: tgId, tenantId } });
+
+        // If already linked to the same account
+        if (tempUser && tempUser.id === webUserId) {
+          return ctx.reply('✅ Этот Telegram уже привязан к вашему аккаунту.', {
+            parse_mode: 'HTML',
+            ...replyKeyboard
+          });
+        }
+
+        // [VULN-TG-01 Protection 1] Reject hijacking of established non-bot web accounts
+        if (tempUser && !tempUser.isBotOnly && tempUser.id !== webUserId) {
+          return ctx.reply(
+            '❌ <b>Привязка невозможна</b>\n────────────────────\n' +
+            'К этому Telegram уже привязан полноценный профиль на сайте.\n' +
+            'Чтобы привязать другой аккаунт, сначала отвяжите Telegram в настройках профиля на сайте.',
+            { parse_mode: 'HTML' }
+          );
+        }
+
+        // [VULN-TG-01 Protection 2] Interactive Confirmation Prompt (CSRF & Deep-Link Balance Drain Immunity)
+        const emailMasked = webUser.email 
+          ? webUser.email.replace(/^(.)(.*)(@.*)$/, (_m, a, b, c) => `${a}${'*'.repeat(Math.min(b.length, 4))}${c}`) 
+          : 'профиль на сайте';
+        const balanceTransferNotice = (tempUser && tempUser.balance > BigInt(0))
+          ? `\n\n⚠️ <b>Баланс:</b> Баланс этого Telegram (${(Number(tempUser.balance) / 100).toFixed(2)} ₽) будет объединён с аккаунтом на сайте.`
+          : '';
+
+        return ctx.reply(
+          `🔐 <b>Подтверждение привязки аккаунта</b>\n────────────────────\n` +
+          `Вы собираетесь связать этот Telegram с аккаунтом: <b>${emailMasked}</b>.${balanceTransferNotice}\n\n` +
+          `Вы подтверждаете объединение профилей?`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('✅ Да, привязать аккаунт', `confirm_bind:${payload}`)],
+              [Markup.button.callback('❌ Отмена', 'cancel_bind')]
+            ])
+          }
+        );
+      } else {
+        return ctx.reply(
+          '⚠️ <b>Ссылка недействительна</b>\n\n' +
+          'Срок действия ссылки истек или она уже была использована. Получите новую ссылку на сайте.',
+          { parse_mode: 'HTML' }
+        );
       }
     }
 
@@ -808,6 +833,92 @@ function setupStorePipeline(bot: Telegraf<BotContext>, opts: BotHandlerOptions):
   bot.action('bind_account', async (ctx: BotContext) => {
     await ctx.answerCbQuery().catch(() => {});
     return sendBindInstructions(ctx);
+  });
+
+  bot.action(/^confirm_bind:(.+)$/, async (ctx: BotContext) => {
+    await ctx.answerCbQuery('Проверка привязки...').catch(() => {});
+    if (!ctx.match || !ctx.from) return;
+    const payload = ctx.match[1];
+    const tgId = String(ctx.from.id);
+
+    await ctx.editMessageText('⏳ <b>Привязываем аккаунт...</b>\n\nПожалуйста, подождите завершения операции.', {
+      parse_mode: 'HTML'
+    }).catch(() => {});
+
+    const bindToken = await db.authToken.findFirst({
+      where: { token: payload }
+    });
+
+    if (!bindToken || bindToken.used || bindToken.expiresAt <= new Date()) {
+      return ctx.editMessageText(
+        '⚠️ <b>Ссылка недействительна</b>\n\nСрок действия ссылки истек или она уже была использована. Сгенерируйте новую ссылку на сайте.',
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+
+    const webUserId = bindToken.userId;
+
+    try {
+      await db.$transaction(async (tx) => {
+        const consumedToken = await tx.authToken.updateMany({
+          where: { id: bindToken.id, used: false },
+          data: { used: true }
+        });
+        if (consumedToken.count === 0) {
+          throw new Error("Токен привязки уже использован");
+        }
+
+        const tempUser = await tx.user.findFirst({ where: { telegramId: tgId, tenantId } });
+        
+        if (tempUser && tempUser.id !== webUserId) {
+          if (!tempUser.isBotOnly) {
+            throw new Error("Невозможно объединить: к Telegram уже привязан независимый веб-аккаунт.");
+          }
+
+          await tx.ticket.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.order.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.payment.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.invoice.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          await tx.auditLog.updateMany({ where: { userId: tempUser.id }, data: { userId: webUserId } });
+          
+          if (tempUser.balance > BigInt(0)) {
+            const amount = Number(tempUser.balance);
+            await WalletOps.charge(tx, tempUser.id, amount, `Списание баланса при слиянии Telegram ${tempUser.email} с ${webUserId}`, {
+              idempotencyKey: `merge-debit-bot-${tempUser.id}-${webUserId}`
+            });
+            await WalletOps.credit(tx, webUserId, amount, `Перенос баланса со старого аккаунта Telegram ${tempUser.email}`, {
+              idempotencyKey: `merge-credit-bot-${tempUser.id}-${webUserId}`
+            });
+          }
+          
+          await tx.user.update({ where: { id: tempUser.id }, data: { telegramId: null } });
+        }
+
+        await tx.user.update({ where: { id: webUserId }, data: { telegramId: tgId } });
+      });
+
+      await ctx.editMessageText(
+        '🎉 <b>Аккаунт успешно привязан!</b>\n\nТеперь вы можете управлять заказами и балансом прямо через Telegram.',
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+
+      return ctx.reply('Главное меню:', { ...replyKeyboard });
+    } catch (err: unknown) {
+      console.error('[StorePipeline Bind] Error:', err);
+      return ctx.editMessageText(
+        '❌ <b>Ошибка привязки</b>\n\n' +
+        (err instanceof Error ? err.message : 'Не удалось привязать аккаунт. Попробуйте создать новую ссылку в личном кабинете.'),
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+  });
+
+  bot.action('cancel_bind', async (ctx: BotContext) => {
+    await ctx.answerCbQuery('Привязка отменена').catch(() => {});
+    return ctx.editMessageText(
+      '❌ <b>Привязка аккаунта отменена</b>\n\nВаш текущий профиль Telegram и баланс в полной безопасности.',
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
   });
 
   bot.action('support', async (ctx: BotContext) => {

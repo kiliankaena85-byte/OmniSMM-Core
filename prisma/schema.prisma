@@ -28,7 +28,7 @@ model User {
   apiKeyHash      String? @unique
   referralCode    String? @unique
   referredById    String?
-  referralBalance Int     @default(0)
+  referralBalance BigInt    @default(0)
   telegramId      String? // Telegram user ID for omnichannel support routing
   phoneHash       String? @unique // SHA-256 hash of verified Telegram contact
   isKycVerified   Boolean @default(false)
@@ -115,6 +115,11 @@ model User {
   customerGroupId            String?
   customerGroup              CustomerGroup?                  @relation("CustomerGroupUsers", fields: [customerGroupId], references: [id], onDelete: SetNull)
 
+  // Tester Invites (SPEC-TESTER-INVITES-2026)
+  isTester                   Boolean                       @default(false)
+  createdTesterInvites       TesterInvite[]                @relation("CreatedTesterInvites")
+  usedTesterInvites          TesterInvite[]                @relation("UsedTesterInvite")
+
   tenantId       String   @default("smmplan")
   allowedTenants String[] @default(["smmplan"])
 
@@ -186,6 +191,27 @@ model AuthToken {
   @@index([expiresAt])
 }
 
+model TesterInvite {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  tenantId    String    @default("smmplan")
+  note        String?
+  status      String    @default("ACTIVE") // ACTIVE, USED, REVOKED, EXPIRED
+  expiresAt   DateTime
+  createdById String?
+  createdBy   User?     @relation("CreatedTesterInvites", fields: [createdById], references: [id], onDelete: SetNull)
+  usedById    String?
+  usedBy      User?     @relation("UsedTesterInvite", fields: [usedById], references: [id], onDelete: SetNull)
+  usedEmail   String?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([code])
+  @@index([status, expiresAt])
+  @@index([tenantId])
+}
+
 model Session {
   id             String   @id @default(cuid())
   userId         String
@@ -237,6 +263,7 @@ model Category {
   tenantId       String    @default("smmplan")
   sort           Int       @default(0)
   activityType   String?   // FOLLOWERS, LIKES, VIEWS, REPOSTS, COMMENTS, VOTES, BOOSTS, OTHER
+  description    String?   // Public description of the category explaining what it includes and how it differs
   requireWarning Boolean   @default(false)
   warningMessage String?
   analyzerTags   String?   // Comma-separated list of Link Analyzer types (e.g. "private_post,channel")

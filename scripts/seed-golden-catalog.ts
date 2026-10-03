@@ -139,6 +139,17 @@ function generateDescription(network: string, action: string, tier: string, rawN
 }
 
 async function main() {
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  const existingCats = await prisma.category.count();
+  if (isLocked) {
+    console.error(`⛔ [GUARD] Catalog is LOCKED & INVIOLABLE. Aborting seed-golden-catalog. Unlock via scripts/lock-database.ts unlock first.`);
+    process.exit(1);
+  }
+  if (existingCats > 0 && !process.argv.includes('--force')) {
+    console.error(`⛔ [GUARD] Database already contains ${existingCats} existing categories. Aborting seed-golden-catalog.`);
+    process.exit(1);
+  }
   console.log('Ensure Providers exist in DB...');
   for (const p of PROVIDERS) {
     let dbProvider = await prisma.provider.findFirst({ where: { name: p.name } });

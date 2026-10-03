@@ -7,21 +7,28 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 export function getDatasourceUrl(): string | undefined {
-  if (process.env.CONTOUR === 'test' && process.env.DATABASE_URL_TEST) {
-    return process.env.DATABASE_URL_TEST;
-  }
-  if (process.env.CONTOUR === 'prod' && process.env.DATABASE_URL_PROD) {
-    return process.env.DATABASE_URL_PROD;
-  }
+  const isTestMode = process.env.CONTOUR === 'test' || process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
   let url = process.env.DATABASE_URL || process.env.POSTGRES_URL_NON_POOLING || process.env.POSTGRES_URL;
+  if (isTestMode && process.env.DATABASE_URL_TEST) {
+    url = process.env.DATABASE_URL_TEST;
+  } else if (process.env.CONTOUR === 'prod' && process.env.DATABASE_URL_PROD) {
+    url = process.env.DATABASE_URL_PROD;
+  }
   if (url && url.startsWith('prisma://')) {
     url = process.env.POSTGRES_URL_NON_POOLING || process.env.DATABASE_URL_UNPOOLED || process.env.DIRECT_URL || url.replace(/^prisma:\/\//, 'postgresql://');
+  }
+
+  // Fail-closed test isolation: If tests are running, NEVER let Prisma connect to production smmplan_lite
+  if (isTestMode && url && url.includes('/smmplan_lite')) {
+    const testFallback = 'postgresql://postgres:postgres@127.0.0.1:5435/smmplan_test?schema=public';
+    console.warn('🛡️ [DB ISOLATION] Prevented test runner from connecting to production database (smmplan_lite). Redirected to smmplan_test.');
+    url = testFallback;
   }
   if (url) {
     try {
       const parsed = new URL(url);
       if (!parsed.searchParams.has('connection_limit')) {
-        const poolLimit = process.env.APP_ROLE === 'worker' ? '5' : (process.env.DATABASE_POOL_SIZE || '10');
+        const poolLimit = process.env.APP_ROLE === 'worker' ? '5' : (process.env.DATABASE_POOL_SIZE || '50');
         parsed.searchParams.set('connection_limit', poolLimit);
       }
       if (!parsed.searchParams.has('pool_timeout')) {
@@ -73,6 +80,10 @@ export function createPrismaClient(): PrismaClient {
     query: {
       service: {
         async deleteMany({ args, query }: { args: Prisma.ServiceDeleteManyArgs; query: (args: Prisma.ServiceDeleteManyArgs) => Promise<Prisma.BatchPayload> }) {
+          const dsUrl = getDatasourceUrl() || '';
+          if (dsUrl.includes('/smmplan_lite')) {
+            throw new Error('🚨 [SAFE-GUARD] Service.deleteMany() is STRICTLY FORBIDDEN on production database (smmplan_lite)!');
+          }
           if (!args?.where || Object.keys(args.where).length === 0) {
             if (process.env.NODE_ENV === 'production') {
               throw new Error('🚨 [SAFE-GUARD] Unconditional Service.deleteMany() is strictly blocked in production!');
@@ -87,6 +98,10 @@ export function createPrismaClient(): PrismaClient {
       },
       category: {
         async deleteMany({ args, query }: { args: Prisma.ServiceDeleteManyArgs; query: (args: Prisma.ServiceDeleteManyArgs) => Promise<Prisma.BatchPayload> }) {
+          const dsUrl = getDatasourceUrl() || '';
+          if (dsUrl.includes('/smmplan_lite')) {
+            throw new Error('🚨 [SAFE-GUARD] Category.deleteMany() is STRICTLY FORBIDDEN on production database (smmplan_lite)!');
+          }
           if (!args?.where || Object.keys(args.where).length === 0) {
             if (process.env.NODE_ENV === 'production') {
               throw new Error('🚨 [SAFE-GUARD] Unconditional Category.deleteMany() is strictly blocked in production!');
@@ -101,6 +116,10 @@ export function createPrismaClient(): PrismaClient {
       },
       network: {
         async deleteMany({ args, query }: { args: Prisma.ServiceDeleteManyArgs; query: (args: Prisma.ServiceDeleteManyArgs) => Promise<Prisma.BatchPayload> }) {
+          const dsUrl = getDatasourceUrl() || '';
+          if (dsUrl.includes('/smmplan_lite')) {
+            throw new Error('🚨 [SAFE-GUARD] Network.deleteMany() is STRICTLY FORBIDDEN on production database (smmplan_lite)!');
+          }
           if (!args?.where || Object.keys(args.where).length === 0) {
             if (process.env.NODE_ENV === 'production') {
               throw new Error('🚨 [SAFE-GUARD] Unconditional Network.deleteMany() is strictly blocked in production!');

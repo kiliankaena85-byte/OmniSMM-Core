@@ -248,7 +248,8 @@ class UnifiedLinkEngineImpl {
     }
 
     // 9. Strict Zod Schema Format Validation
-    const schemaValidator = getUnifiedLinkValidator(analysis.platform, resolvedTargetType);
+    const isPrivate = (service as { isPrivate?: boolean }).isPrivate === true || (service as { targetType?: string }).targetType === 'PRIVATE_POST' || resolvedTargetTypeStr === 'PRIVATE_POST';
+    const schemaValidator = getUnifiedLinkValidator(analysis.platform, resolvedTargetType, { isPrivate });
     const parsed = schemaValidator.safeParse(canonicalLink);
     if (!parsed.success) {
       return {

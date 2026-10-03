@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { db } from '@/lib/db';
 import { WalletOps } from '../financial/wallet-ops';
 
@@ -147,27 +148,31 @@ export const adminMarketingService = {
     return db.$transaction(async (tx) => {
       const user = await tx.user.findUnique({ where: { id: userId } });
       if (!user) throw new Error('User not found');
-      if (user.referralBalance < amountToPayCents) {
+      const amountBigInt = BigInt(amountToPayCents);
+      if (user.referralBalance < amountBigInt) {
         throw new Error('Insufficient referral balance');
       }
       
-      if (user.referralBalance !== amountToPayCents) {
+      if (user.referralBalance !== amountBigInt) {
         throw new Error('Partial payouts are not supported to maintain financial data integrity. Payout amount must exactly match the full referral balance.');
       }
 
-      // Deduct from referral atomically
-      const updated = await tx.user.updateMany({
-        where: {
-          id: userId,
-          referralBalance: { gte: amountToPayCents },
-          ...(user.tenantId ? { tenantId: user.tenantId } : {})
-        },
-        data: { referralBalance: { decrement: amountToPayCents } },
-      });
-
-      if (updated.count === 0) {
-        throw new Error('Insufficient referral balance or concurrent payout detected.');
-      }
+      // Deduct from referral atomically via WalletOps (strict withdrawal — never creates debt)
+      // INV-REF-02: one payoutId binds the debit/credit pair. Amount-based keys collided on a
+      // repeat payout of the same sum (credit returned cached → referral debited, main not credited).
+      const payoutId = randomUUID();
+      await WalletOps.referralDebit(
+        tx,
+        userId,
+        amountToPayCents,
+        `Вывод реферального баланса (admin payout)`,
+        {
+          adminId,
+          idempotencyKey: `referral-debit-payout-${payoutId}`,
+          transactionType: 'REFERRAL_REVERSAL',
+          tenantId: user.tenantId || 'smmplan'
+        }
+      );
 
       // Mark all pending commissions for this user as PAID
       await tx.commission.updateMany({
@@ -181,7 +186,7 @@ export const adminMarketingService = {
         userId,
         amountToPayCents,
         `Выплата реферального баланса (admin payout)`,
-        { adminId, idempotencyKey: `referral-payout-${userId}-${amountToPayCents}` }
+        { adminId, idempotencyKey: `referral-payout-${payoutId}` }
       );
 
       // Audit Log

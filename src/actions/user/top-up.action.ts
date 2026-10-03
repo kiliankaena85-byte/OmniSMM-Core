@@ -9,6 +9,7 @@ import { RateLimitService } from "@/services/core/rate-limit.service";
 import { ExactMath } from "@/lib/financial/exact-math";
 
 import { resolveTenantFromRequest } from "@/lib/tenant-resolver-edge";
+import { SettingsProvider } from "@/lib/settings";
 
 export interface TopUpActionResult {
   success: boolean;
@@ -52,6 +53,18 @@ export async function createTopUpPaymentAction(
     }
     if (dbUser.isDeleted === true || dbUser.isActive === false) {
       return { success: false, error: "Ваш аккаунт заблокирован или удален" };
+    }
+
+    // SPEC-TESTER-INVITES-2026 (INV-TESTER-04): Guard test mode top-ups
+    const isTestMode = await SettingsProvider.isTestMode(requestTenantId);
+    if (isTestMode) {
+      const isStaff = ['ADMIN', 'OWNER', 'MANAGER', 'SUPPORT'].includes(dbUser.role);
+      if (!dbUser.isTester && !isStaff) {
+        return {
+          success: false,
+          error: "Тестовое пополнение доступно только авторизованным тестировщикам по ссылке-приглашению.",
+        };
+      }
     }
 
     // Anti-fraud: gateways with chargeback risk require Telegram verification over 15,000 RUB
@@ -98,7 +111,6 @@ export async function createTopUpPaymentAction(
       where: { slug: 'terms' },
       select: { updatedAt: true }
     });
-    const { SettingsProvider } = await import('@/lib/settings');
     const targetTenantId = requestTenantId;
     const legalSettings = await SettingsProvider.getContactAndLegalSettings(targetTenantId);
     const legalInn = legalSettings.COMPANY_INN || 'default_inn';
@@ -126,8 +138,6 @@ export async function createTopUpPaymentAction(
     const description = gateway === 'yookassa'
       ? `Оплата услуг IT-агентства (Digital Consulting, Счёт: ${payment.id})`
       : `Пополнение баланса (Счёт: ${payment.id})`;
-
-    const isTestMode = await SettingsProvider.isTestMode(targetTenantId);
 
     try {
       const gatewayResult = await gatewaySvc.createPayment({

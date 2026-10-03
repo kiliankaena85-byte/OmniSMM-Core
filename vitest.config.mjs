@@ -31,7 +31,7 @@ export default defineConfig({
     retry: 0,
     testTimeout: 60000,
     hookTimeout: 60000,
-    setupFiles: ['./test/setup.ts'],
+    setupFiles: ['./test/setup-env.ts', './test/setup.ts'],
     globals: true,
     alias: {
       '@': path.resolve(__dirname, './src'),

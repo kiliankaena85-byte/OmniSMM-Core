@@ -95,7 +95,7 @@ describe('YooKassa Signed Webhook & Payment Acceptance Verification', () => {
       headers: {
         'content-type': 'application/json',
         'x-sha256-signature': signature,
-        'x-forwarded-for': '127.0.0.1'
+        'x-forwarded-for': '185.71.76.10' // INV-GW-01: official YooKassa range (loopback no longer accepted)
       },
       body: rawBody
     });
@@ -135,7 +135,7 @@ describe('YooKassa Signed Webhook & Payment Acceptance Verification', () => {
       headers: {
         'content-type': 'application/json',
         'x-sha256-signature': invalidSignature,
-        'x-forwarded-for': '127.0.0.1'
+        'x-forwarded-for': '185.71.76.10' // INV-GW-01: official YooKassa range (loopback no longer accepted)
       },
       body: rawBody
     });
@@ -169,7 +169,7 @@ describe('YooKassa Signed Webhook & Payment Acceptance Verification', () => {
       headers: {
         'content-type': 'application/json',
         'x-sha256-signature': signature,
-        'x-forwarded-for': '127.0.0.1'
+        'x-forwarded-for': '185.71.76.10' // INV-GW-01: official YooKassa range (loopback no longer accepted)
       },
       body: rawBody
     });

@@ -6,12 +6,14 @@ import { OrderEngine } from "@/hooks/useOrderEngine";
 import { useCheckoutOrchestrator } from "./order-engine/useCheckoutOrchestrator";
 import { LinkModal } from "./order-engine/LinkModal";
 
-import { PlatformLinkGuideDrawer } from "./order-engine/PlatformLinkGuideDrawer";
-import { PaymentGatewaySelectionModal } from "./order-engine/PaymentGatewaySelectionModal";
-import { CheckoutAuthModal } from "./order-engine/modals/CheckoutAuthModal";
-import { PaymentVpnHelperModal } from "./order-engine/modals/PaymentVpnHelperModal";
-import { LegalDocumentModal } from "./order-engine/LegalDocumentModal";
-import { MobileCatalogModal } from "./order-engine/MobileCatalogModal";
+import dynamic from "next/dynamic";
+
+const PlatformLinkGuideDrawer = dynamic(() => import("./order-engine/PlatformLinkGuideDrawer").then(m => m.PlatformLinkGuideDrawer), { ssr: false });
+const PaymentGatewaySelectionModal = dynamic(() => import("./order-engine/PaymentGatewaySelectionModal").then(m => m.PaymentGatewaySelectionModal), { ssr: false });
+const CheckoutAuthModal = dynamic(() => import("./order-engine/modals/CheckoutAuthModal").then(m => m.CheckoutAuthModal), { ssr: false });
+const PaymentVpnHelperModal = dynamic(() => import("./order-engine/modals/PaymentVpnHelperModal").then(m => m.PaymentVpnHelperModal), { ssr: false });
+const LegalDocumentModal = dynamic(() => import("./order-engine/LegalDocumentModal").then(m => m.LegalDocumentModal), { ssr: false });
+const MobileCatalogModal = dynamic(() => import("./order-engine/MobileCatalogModal").then(m => m.MobileCatalogModal), { ssr: false });
 
 export interface LandingModalsProps {
   engine: OrderEngine;

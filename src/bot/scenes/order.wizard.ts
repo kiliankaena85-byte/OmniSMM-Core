@@ -14,6 +14,7 @@ import { marketingService } from '@/services/marketing.service';
 import { UnifiedPaymentService } from '@/services/financial/unified-payment.service';
 import { escapeHtml } from '../utils/formatter';
 import { formatCents } from '@/lib/utils';
+import { getDripFeedFloorViolation } from '@/services/orders/drip-feed-floor';
 import type { BotContext } from '../types/bot-context';
 import { handleWizardMenuNavigation } from '../utils/menu-navigation';
 
@@ -119,6 +120,15 @@ async function showFinalConfirmation(ctx: BotContext) {
   }
 
   const totalQuantity = (isDripFeed && runs > 1) ? qty * runs : qty;
+
+  if (isDripFeed && runs > 1) {
+    const dripViolation = getDripFeedFloorViolation(totalQuantity, runs, service.minQty, 'runs');
+    if (dripViolation) {
+      await ctx.reply(`❌ <b>Ошибка Drip-Feed:</b> ${dripViolation}. Пожалуйста, повторите настройку.`, { parse_mode: 'HTML' });
+      return ctx.scene.leave();
+    }
+  }
+
   const pricing = await marketingService.calculatePrice(user.id, service.id, totalQuantity);
 
   if (pricing.totalCents <= 0) {
@@ -385,6 +395,37 @@ export const orderWizard = new Scenes.WizardScene<BotContext>(
     }
 
     const orderData = getOrderData(ctx);
+    const service = orderData.service;
+    if (!service) return ctx.scene.leave();
+
+    const totalQuantity = (orderData.isDripFeed && runs > 1) ? (orderData.qty || 0) * runs : (orderData.qty || 0);
+
+    const dripViolation = getDripFeedFloorViolation(totalQuantity, runs, service.minQty, 'runs');
+    if (dripViolation) {
+      return ctx.reply(
+        `⚠️ <b>Некорректная настройка Drip-Feed:</b>\n\n` +
+        `${dripViolation}.\n\n` +
+        `Минимальное количество за 1 запуск для этой услуги: <b>${service.minQty.toLocaleString()}</b> шт.\n` +
+        `Пожалуйста, введите другое число запусков:`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel_wizard')]])
+        }
+      );
+    }
+
+    if (totalQuantity > service.maxQty) {
+      return ctx.reply(
+        `⚠️ <b>Превышен максимум услуги:</b>\n\n` +
+        `Суммарное количество (${totalQuantity.toLocaleString()} шт.) превышает максимальный лимит услуги (<b>${service.maxQty.toLocaleString()}</b> шт.).\n\n` +
+        `Пожалуйста, уменьшите количество запусков:`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel_wizard')]])
+        }
+      );
+    }
+
     orderData.runs = runs;
 
     await ctx.reply(
@@ -473,7 +514,16 @@ orderWizard.action('confirm_order', async (ctx: BotContext) => {
   if (!user) return ctx.scene.leave();
 
   if (Number(user.balance) >= totalCents) {
+    // [VULN-TG-03 Mitigation] Immediate visual debounce to prevent double-click race condition
+    await ctx.editMessageText('⏳ <b>Оформление заказа...</b>\n\nПожалуйста, подождите, операция регистрируется в системе.', {
+      parse_mode: 'HTML'
+    }).catch(() => {});
+
     try {
+      // [VULN-TG-02 Mitigation] Deterministic idempotencyKey prevents double-charge in WalletOps
+      if (!orderData.idempotencyKey) {
+        orderData.idempotencyKey = `bot-order-${user.id}-${service.id}-${Date.now()}`;
+      }
       const res = await orderService.createOrder(user.id, {
         serviceId: service.id,
         link,
@@ -483,7 +533,7 @@ orderWizard.action('confirm_order', async (ctx: BotContext) => {
         runs,
         interval,
         isLinkOverridden: Boolean(isLinkOverridden)
-      });
+      }, orderData.idempotencyKey);
       if (!res.success) {
         throw new Error(res.error || 'Ошибка оформления заказа');
       }

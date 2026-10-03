@@ -53,10 +53,14 @@ export default async function catalogProcessor(job: Job<CatalogMutationPayload>)
         const { SettingsProvider } = await import('@/lib/settings');
         const { db } = await import('@/lib/db');
         const { getCostRub } = await import('@/lib/pricing/currency-invariant');
-        const { UPPER_SANITY_LIMIT_RUB } = await import('@/lib/financial-constants');
+        const { UPPER_SANITY_LIMIT_RUB, USD_RUB_SANITY_MIN, USD_RUB_SANITY_MAX } = await import('@/lib/financial-constants');
         
         const { CBRRateService } = await import('@/services/system/cbr-rate.service');
         const usdRate = await SettingsProvider.getExchangeRateUSD();
+        // INV-CAT-01: fail-closed — a garbage FX rate must never mass-quarantine the storefront
+        if (!Number.isFinite(usdRate) || usdRate < USD_RUB_SANITY_MIN || usdRate > USD_RUB_SANITY_MAX) {
+          throw new Error(`[CatalogProcessor] RECONCILE_PRICES aborted: USD/RUB rate ${usdRate} outside sanity band [${USD_RUB_SANITY_MIN}, ${USD_RUB_SANITY_MAX}]`);
+        }
         const liveCrossRates = await CBRRateService.getLiveCrossRates();
 
         let scanned = 0;
@@ -209,10 +213,13 @@ export default async function catalogProcessor(job: Job<CatalogMutationPayload>)
           const stats = await adminCatalogService.syncProviderCatalog(providerId, admin as { id: string; email: string });
           log.info(`[CatalogProcessor] Catalog sync completed for ${providerId}. Disabled Zombies: ${stats.zombiesDisabled}, Resurrected: ${stats.resurrected}, Anomalies: ${stats.priceAnomalies}`);
           
-          // Apply blacklists, reclassification, and maxQty caps
+          // Apply blacklists, reclassification, and maxQty caps — strictly per tenant (INV-CAT-02)
           try {
             const { applyPostSyncRules } = await import('@/services/providers/post-sync-rules');
-            await applyPostSyncRules();
+            const { VALID_TENANTS } = await import('@/config/tenants');
+            for (const tenantId of Array.from(VALID_TENANTS)) {
+              await applyPostSyncRules(tenantId);
+            }
           } catch (postSyncErr) {
             const errMsg = postSyncErr instanceof Error ? postSyncErr.message : String(postSyncErr);
             log.error(`[CatalogProcessor] applyPostSyncRules failed: ${errMsg}`);

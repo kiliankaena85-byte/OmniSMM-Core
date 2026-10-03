@@ -1,26 +1,33 @@
-﻿import * as dotenv from 'dotenv';
-dotenv.config();
-import { db } from '@/lib/db';
+import 'dotenv/config';
+import { db } from '../src/lib/db';
 
 async function main() {
   const networks = await db.network.findMany({
+    orderBy: { sort: 'asc' },
     include: {
       categories: {
+        orderBy: { sort: 'asc' },
         include: {
-          services: { select: { id: true, name: true, isActive: true } }
+          _count: { select: { services: true } }
         }
       }
     }
   });
 
-  console.log('=== ALL NETWORKS AND THEIR CATEGORIES ===');
+  console.log(`=== FOUND ${networks.length} NETWORKS ===`);
+  let totalCategories = 0;
+  let totalServices = 0;
+
   for (const net of networks) {
-    console.log(`\n🌐 Network: ${net.name} (${net.slug}) - ${net.categories.length} categories`);
-    for (const c of net.categories) {
-      const activeCount = c.services.filter(s => s.isActive).length;
-      console.log(`   📁 [${c.id}] "${c.name}" (active: ${activeCount}/${c.services.length})`);
+    console.log(`\nNetwork: [${net.slug}] "${net.name}" (${net.categories.length} categories)`);
+    for (const cat of net.categories) {
+      totalCategories++;
+      totalServices += cat._count.services;
+      console.log(`  - Category ID: ${cat.id} | Slug: "${cat.slug}" | Name: "${cat.name}" | Services: ${cat._count.services} | Has Desc: ${!!cat.description}`);
     }
   }
+
+  console.log(`\nTOTAL: ${totalCategories} categories, ${totalServices} services in DB.`);
 }
 
-main().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });
+main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });

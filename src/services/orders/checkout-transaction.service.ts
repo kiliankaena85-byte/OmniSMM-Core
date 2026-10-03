@@ -11,6 +11,7 @@ import { marketingService } from '@/services/marketing.service';
 import { RateLimitService } from '@/services/core/rate-limit.service';
 import { SettingsManager, SettingsProvider } from '@/lib/settings';
 import { WalletOps } from '@/services/financial/wallet-ops';
+import { IdempotencyKeys } from '@/services/financial/idempotency-keys';
 import { AccountExistsError } from '@/utils/error-handler';
 import { SmartDripService } from '@/services/dripfeed/smart-drip.service';
 import { MutexManager } from '@/lib/redis-lock';
@@ -169,6 +170,10 @@ export class CheckoutTransactionService {
             include: { payment: true }
           });
           if (existingOrder) {
+            // INV-BOLA-01: the key is client-supplied — never disclose or mutate a foreign order
+            if (existingOrder.userId !== user.id || existingOrder.tenantId !== tenantId) {
+              throw new Error('Некорректный ключ запроса. Обновите страницу и повторите оформление.');
+            }
             if (existingOrder.status !== 'ERROR') throw new IdempotencyConflictError(existingOrder);
             await tx.order.update({
               where: { id: existingOrder.id },
@@ -180,14 +185,6 @@ export class CheckoutTransactionService {
         if (promoCodeId) {
           const existingUsage = await tx.promoCodeUsage.findFirst({ where: { promoCodeId, userId: user.id } });
           if (existingUsage) throw new Error("Вы уже использовали данный промокод");
-        }
-
-        let balanceChargeResult = null;
-        if (gateway === 'balance') {
-          balanceChargeResult = await WalletOps.charge(tx, user.id, finalTotalCents, `Оплата заказа с баланса`, {
-            idempotencyKey: `balance-charge-${effectiveIdempotencyKey}`,
-            tenantId
-          });
         }
 
         const orderStatus = gateway === 'balance' ? 'PENDING' : 'AWAITING_PAYMENT';
@@ -222,6 +219,17 @@ export class CheckoutTransactionService {
             tenantId
           }
         });
+
+        // INV-IDEM-01: the ledger key is bound to the concrete Order row, never to the
+        // client-supplied key. A retried ERROR order gets a NEW orderId → NEW key → real debit.
+        // Same Serializable tx: INSUFFICIENT_FUNDS rolls the order back atomically.
+        let balanceChargeResult = null;
+        if (gateway === 'balance') {
+          balanceChargeResult = await WalletOps.charge(tx, user.id, finalTotalCents, `Оплата заказа #${newOrder.numericId} с баланса`, {
+            idempotencyKey: IdempotencyKeys.forOrderCharge(newOrder.id),
+            tenantId
+          });
+        }
 
         let secondOrderId: string | undefined;
         if (hasMediaGroup && normalizedMediaGroupLink) {

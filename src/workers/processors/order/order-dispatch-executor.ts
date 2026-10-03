@@ -1,5 +1,4 @@
 // tenant-isolation-ignore: Background worker executed within order.processor runWithTenant wrapper
-import { UnrecoverableError } from 'bullmq';
 import { db } from '../../../lib/db';
 import { getRedisConnection } from '@/lib/queue-manager';
 import { logger } from '../../../lib/logger';
@@ -8,6 +7,8 @@ import { SmartRoutingService, PrioritizedRoute } from '../../../services/provide
 import { OrderRouteEvaluator } from './order-route-evaluator';
 import { OrderAllRoutesFailedHandler } from './order-all-routes-failed-handler';
 import { DatabaseOrderError, DispatchLoopContext } from './types';
+import { parseCustomData } from '../../../schemas/custom-data';
+import { isAmbiguousProviderOutcome, quarantineAmbiguousDispatch, quarantineManualFailover } from './order-dispatch-quarantine';
 
 const log = logger.child({ component: 'OrderDispatchExecutor' });
 
@@ -56,11 +57,56 @@ export class OrderDispatchExecutor {
         }
 
         if (order.customData) {
-          const cType = order.service?.customDataType;
-          if (cType === 'NUMBER' || (serviceName.includes('опрос') && !serviceName.includes('просмотр')) || serviceName.includes('голосование') || serviceName.includes('poll')) {
-            payload.answers_number = order.customData;
+          const parsedCustom = parseCustomData(order.customData);
+          if (parsedCustom) {
+            switch (parsedCustom.kind) {
+              case 'REACTIONS': {
+                const reactionStr = parsedCustom.emojis.join(',');
+                payload.reaction = reactionStr;
+                payload.reactions = reactionStr;
+                break;
+              }
+              case 'POLL': {
+                payload.answers_number = String(parsedCustom.optionIndex);
+                if (parsedCustom.optionText) {
+                  payload.answer_text = parsedCustom.optionText;
+                }
+                break;
+              }
+              case 'COMMENTS': {
+                payload.comments = parsedCustom.lines.join('\n');
+                break;
+              }
+              case 'MENTIONS': {
+                payload.usernames = parsedCustom.usernames.join('\n');
+                if (parsedCustom.hashtag) {
+                  payload.hashtag = parsedCustom.hashtag;
+                }
+                break;
+              }
+              case 'SUBSCRIPTION': {
+                payload.min = parsedCustom.minPerPost;
+                payload.max = parsedCustom.maxPerPost;
+                payload.posts = parsedCustom.futurePosts;
+                payload.delay = parsedCustom.delayMinutes;
+                break;
+              }
+              case 'MEDIA_GROUP': {
+                payload.media_group = [parsedCustom.firstPostUrl, parsedCustom.lastPostUrl].join(',');
+                break;
+              }
+            }
           } else {
-            payload.comments = order.customData;
+            // Legacy / raw string fallback
+            const cType = order.service?.customDataType;
+            if (cType === 'NUMBER' || (serviceName.includes('опрос') && !serviceName.includes('просмотр')) || serviceName.includes('голосование') || serviceName.includes('poll')) {
+              payload.answers_number = order.customData;
+            } else if (serviceName.includes('реакц') || serviceName.includes('reaction')) {
+              payload.reaction = order.customData;
+              payload.reactions = order.customData;
+            } else {
+              payload.comments = order.customData;
+            }
           }
         }
 
@@ -111,50 +157,16 @@ export class OrderDispatchExecutor {
           throw error;
         }
 
-        const errMsg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-        const isTimeout = errMsg.includes('timeout') || errMsg.includes('etimedout') || errMsg.includes('econnreset') || errMsg.includes('socket hang up') || errMsg.includes('eai_again');
-
-        if (isTimeout) {
-          await db.order.update({
-            where: { id: order.id },
-            data: { status: 'PENDING_CHECK', error: `Сетевой таймаут при отправке: ${error instanceof Error ? error.message : String(error)}` }
-          });
-          try {
-            const { sendAdminAlert } = await import('@/lib/notifications');
-            sendAdminAlert(
-              `⚠️ [ТАЙМАУТ СВЯЗИ С ПОСТАВЩИКОМ] Заказ #${order.numericId} (Услуга: ${order.service?.name || ''})\n` +
-              `Поставщик ${route.provider.name} не ответил вовремя. Заказ переведён в статус PENDING_CHECK.`,
-              'WARNING'
-            );
-          } catch { /* ignore */ }
-          await connection.del(redisKey, `order:dispatch_lock:${order.id}`).catch(() => {});
-          throw new UnrecoverableError(`Ambiguous Timeout: ${error instanceof Error ? error.message : String(error)}`);
+        // INV-GW-05: the provider MAY have accepted the order → PENDING_CHECK, never cascade
+        if (isAmbiguousProviderOutcome(error)) {
+          await quarantineAmbiguousDispatch(order, route.provider.name, redisKey, error);
         }
 
         const originalError = error instanceof Error ? error.message : String(error);
         lastError = originalError;
 
         if (route.failoverMode !== 'automatic') {
-          const { OrderTriageAlertService } = await import('@/services/orders/order-triage-alert.service');
-          const classification = OrderTriageAlertService.classifyError(originalError);
-          const formattedError = OrderTriageAlertService.formatOrderErrorMessage(classification, originalError, route.provider.name);
-
-          await db.order.update({
-            where: { id: order.id },
-            data: { status: 'PENDING_CHECK', providerId: route.providerId, providerServiceId: route.providerServiceId, error: formattedError }
-          });
-
-          try {
-            await OrderTriageAlertService.sendOrderCheckAlert({
-              orderId: order.id, numericId: order.numericId, serviceName: order.service?.name || '',
-              categoryName: order.service?.category?.name, networkName: order.service?.category?.network?.name,
-              link: order.link, quantity: order.quantity, chargeKopecks: order.charge,
-              userEmail: order.user?.email, tenantId: order.tenantId, providerName: route.provider.name,
-            }, originalError, route.provider.name);
-          } catch { /* ignore */ }
-
-          await connection.del(redisKey, `order:dispatch_lock:${order.id}`).catch(() => {});
-          throw new UnrecoverableError(`Manual failover mode: operator triage required`);
+          await quarantineManualFailover(order, route, redisKey, originalError);
         }
 
         if (nextRoute) {

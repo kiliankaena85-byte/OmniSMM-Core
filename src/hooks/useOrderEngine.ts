@@ -107,6 +107,7 @@ export function useOrderEngine(
     initialServiceId,
     initialServices,
     defaultCat,
+    networkId,
     setNetworkId,
     categoryId,
     setCategoryId,

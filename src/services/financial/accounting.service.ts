@@ -37,7 +37,11 @@ class AccountingService {
       // Redis error fallback
     }
     
-    const dateFilter = startDate && endDate ? { createdAt: { gte: startDate, lte: endDate } } : {};
+    // Quantize timestamps to 30 seconds for cache determinism
+    const qStartDate = startDate ? new Date(Math.floor(startDate.getTime() / 30000) * 30000) : undefined;
+    const qEndDate = endDate ? new Date(Math.floor(endDate.getTime() / 30000) * 30000) : undefined;
+
+    const dateFilter = qStartDate && qEndDate ? { createdAt: { gte: qStartDate, lte: qEndDate } } : {};
 
     // 1. Calculate Revenue and Gateway Fees (All payments SUCCEEDED)
     const paymentGroups = await db.payment.groupBy({

@@ -15,11 +15,25 @@ vi.mock('@/lib/storefront/storefront-auth', () => ({
   resolveStorefrontContext: vi.fn(),
 }));
 
-vi.mock('@/services/core/rate-limit.service', () => ({
-  RateLimitService: {
-    checkCustomKeyDetail: vi.fn(),
-  },
-}));
+vi.mock('@/services/core/rate-limit.service', () => {
+  const checkCustomKeyDetail = vi.fn();
+  const checkDualTierRateLimit = vi.fn(async (opts) => {
+    const detail = await checkCustomKeyDetail(opts.endpoint, opts.ipLimit, 60);
+    return {
+      allowed: detail?.allowed ?? true,
+      blockedBy: detail?.allowed === false ? (detail.blockedBy || 'IP') : 'NONE',
+      limit: detail?.limit ?? opts.ipLimit,
+      remaining: detail?.remaining ?? 0,
+      resetSeconds: detail?.resetSeconds ?? 60,
+    };
+  });
+  return {
+    RateLimitService: {
+      checkCustomKeyDetail,
+      checkDualTierRateLimit,
+    },
+  };
+});
 
 vi.mock('@/lib/db', () => ({
   db: {
@@ -31,6 +45,7 @@ vi.mock('@/lib/db', () => ({
     },
     service: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
     },
     order: {
       findFirst: vi.fn(),
@@ -143,6 +158,53 @@ describe('Storefront API v1 Routes Suite', () => {
       expect(data.success).toBe(false);
       expect(data.error).toBe('Too Many Requests');
     });
+
+    it('GET /catalog returns 429 with TENANT_CAPACITY_EXCEEDED when tenant bulkhead is exhausted', async () => {
+      vi.mocked(resolveStorefrontContext).mockResolvedValueOnce(mockPublicCtx);
+      vi.mocked(RateLimitService.checkDualTierRateLimit).mockResolvedValueOnce({
+        allowed: false,
+        blockedBy: 'TENANT_BULKHEAD',
+        limit: 600,
+        remaining: 0,
+        resetSeconds: 30,
+      });
+
+      const req = new NextRequest('http://localhost/api/storefront/v1/catalog', {
+        headers: { 'x-storefront-key': 'pk_live_123' },
+      });
+
+      const res = await getCatalogRoute(req);
+      expect(res.status).toBe(429);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.code).toBe('TENANT_CAPACITY_EXCEEDED');
+      expect(data.error).toContain('Bulkhead Protection');
+      expect(res.headers.get('Retry-After')).toBe('30');
+    });
+
+    it('POST /orders returns 429 with TENANT_CAPACITY_EXCEEDED when tenant order capacity is exhausted', async () => {
+      vi.mocked(resolveStorefrontContext).mockResolvedValueOnce(mockSecretCtx);
+      vi.mocked(RateLimitService.checkDualTierRateLimit).mockResolvedValueOnce({
+        allowed: false,
+        blockedBy: 'TENANT_BULKHEAD',
+        limit: 180,
+        remaining: 0,
+        resetSeconds: 20,
+      });
+
+      const req = new NextRequest('http://localhost/api/storefront/v1/orders', {
+        method: 'POST',
+        headers: { 'x-storefront-key': 'sk_live_123' },
+        body: JSON.stringify({ serviceId: 'srv_1' }),
+      });
+
+      const res = await postOrdersRoute(req);
+      expect(res.status).toBe(429);
+      const data = await res.json();
+      expect(data.success).toBe(false);
+      expect(data.code).toBe('TENANT_CAPACITY_EXCEEDED');
+      expect(res.headers.get('Retry-After')).toBe('20');
+    });
   });
 
   describe('2. Secret Key Guard on POST /orders', () => {
@@ -193,6 +255,9 @@ describe('Storefront API v1 Routes Suite', () => {
       } as any);
 
       vi.mocked(db.service.findUnique).mockResolvedValueOnce({
+        name: 'Telegram Real Followers',
+      } as any);
+      vi.mocked(db.service.findFirst).mockResolvedValueOnce({
         name: 'Telegram Real Followers',
       } as any);
 

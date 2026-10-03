@@ -11,6 +11,8 @@ export const SIDEBAR_DOMAIN_ALIASES: Record<string, string> = {
   '/admin/refills':       '/admin/orders',
   '/admin/smart':         '/admin/orders',
   '/admin/docs':          '/admin/orders',
+  // Clients domain
+  '/admin/testers':       '/admin/clients',
   // Finance domain
   '/admin/marketing':     '/admin/finance',
   '/admin/fraud-monitor': '/admin/finance',
@@ -100,6 +102,7 @@ export const OPERATIONS_TABS = [
 
 export const CLIENTS_TABS = [
   { label: 'База клиентов', href: '/admin/clients' },
+  { label: 'Тестировщики (Инвайты)', href: '/admin/testers' },
 ];
 
 export const FINANCE_TABS = [

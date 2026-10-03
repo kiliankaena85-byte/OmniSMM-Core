@@ -56,6 +56,12 @@ export function LoginForm({ isFlux = false }: { isFlux?: boolean }) {
         if (captchaToken) {
           formData.append('captchaToken', captchaToken);
         }
+        if (typeof window !== 'undefined') {
+          const redirect = new URLSearchParams(window.location.search).get('redirect');
+          if (redirect) {
+            formData.append('redirect', redirect);
+          }
+        }
 
         const res = await loginWithPasswordAction(null, formData);
         if (!res.success) {

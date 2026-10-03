@@ -60,10 +60,15 @@ export function WizardStepCategory({
               }`}
               onClick={() => onSelectCategory(cat)}
             >
-              <div className="space-y-1 truncate">
-                <div className="font-extrabold text-foreground text-sm sm:text-base tracking-tight">
+              <div className="space-y-1 min-w-0 flex-1 pr-2">
+                <div className="font-extrabold text-foreground text-sm sm:text-base tracking-tight truncate">
                   {cat.title}
                 </div>
+                {cat.description && (
+                  <div className="text-xs text-muted-foreground/80 line-clamp-2">
+                    {cat.description}
+                  </div>
+                )}
                 <div className="text-xs text-muted-foreground">
                   {cat.services.length} доступных тарифов
                 </div>

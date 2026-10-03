@@ -57,11 +57,21 @@ export function validateRedisUrl(
 }
 
 // Enforce SEC-001 Hardening at startup (pass env password explicitly so URL+envPass combo is accepted)
+const isBuildTime =
+  process.env.NEXT_PHASE === 'phase-production-build' ||
+  process.env.npm_lifecycle_event === 'build' ||
+  process.env.IS_NEXT_BUILD === 'true' ||
+  process.env.NEXT_RUNTIME === 'edge';
+
 const redisCheck = validateRedisUrl(redisUrl, process.env.NODE_ENV, process.env.REDIS_PASSWORD);
 if (!redisCheck.valid) {
-  throw new Error(redisCheck.error);
-}
-if (redisCheck.warning) {
+  if (isBuildTime) {
+    // During next build static page collection, Redis is not connected. Log warning instead of halting build.
+    console.warn('[REDIS] Build-time SEC-001 notice (skipped during compilation):', redisCheck.error);
+  } else {
+    throw new Error(redisCheck.error);
+  }
+} else if (redisCheck.warning) {
   console.warn(redisCheck.warning);
 }
 

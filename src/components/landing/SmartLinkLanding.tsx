@@ -4,14 +4,16 @@ import React from "react";
 import { PublicNetwork, PublicService } from "@/actions/order/catalog";
 import { useOrderEngine } from "@/hooks/useOrderEngine";
 import { Header } from "./Header";
-import { PlanSlideOrderClient } from "./order-engine/variants/PlanSlideOrderClient";
-import { PlanFullscreenCheckout } from "./order-engine/variants/PlanFullscreenCheckout";
+import dynamic from "next/dynamic";
 import { type OrderFlowVariant } from "./order-engine/LayoutVariantToggle";
 import { useCheckoutOrchestrator } from "./order-engine/useCheckoutOrchestrator";
 import { LandingHeroArea } from "./LandingHeroArea";
 import { LandingCatalogContent } from "./LandingCatalogContent";
 import { LandingFooterSection } from "./LandingFooterSection";
-import { LandingModals } from "./LandingModals";
+
+const LandingModals = dynamic(() => import("./LandingModals").then(m => m.LandingModals), { ssr: false });
+const PlanSlideOrderClient = dynamic(() => import("./order-engine/variants/PlanSlideOrderClient").then(m => m.PlanSlideOrderClient), { ssr: false });
+const PlanFullscreenCheckout = dynamic(() => import("./order-engine/variants/PlanFullscreenCheckout").then(m => m.PlanFullscreenCheckout), { ssr: false });
 
 export function SmartLinkLanding({
   initialCatalog,

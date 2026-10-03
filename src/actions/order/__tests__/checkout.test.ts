@@ -25,6 +25,9 @@ vi.mock('@/services/financial/wallet-ops', () => ({
 vi.mock('@/lib/db', () => {
   const mockDb = {
     $transaction: vi.fn((cb) => cb(mockDb)),
+    // runSerializableTransaction sets `SET LOCAL ROLE app_user` + app.current_tenant (RLS)
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+    $executeRaw: vi.fn().mockResolvedValue(0),
     user: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
@@ -328,10 +331,14 @@ describe('checkoutAction', () => {
       updatedAt: new Date(),
     } as any);
 
+    vi.mocked(verifySession).mockResolvedValue({ userId: 'user-1' } as any);
     vi.mocked(db.order.findUnique).mockResolvedValue({
       id: 'existing-order-1',
       paymentId: 'existing-payment-1',
       status: 'PENDING',
+      // INV-BOLA-01: a replay is only honoured for the same owner within the same tenant
+      userId: 'user-1',
+      tenantId: 'smmplan',
       payment: { checkoutUrl: 'https://existing-url' },
     } as any);
 
@@ -354,5 +361,69 @@ describe('checkoutAction', () => {
       expect(result.data.paymentUrl).toBe('https://existing-url');
       expect(db.order.create).not.toHaveBeenCalled();
     }
+  });
+
+  it('5. INV-BOLA-01: foreign idempotency key is rejected without leaking the order', async () => {
+    vi.mocked(verifySession).mockResolvedValue({ userId: 'user-1' } as any);
+    vi.mocked(db.service.findUnique).mockResolvedValue({
+      id: 'service-1',
+      isActive: true,
+      externalId: 'ext-1',
+      minQty: 10,
+      maxQty: 1000,
+      targetType: 'POST',
+      category: { network: { slug: 'tg' } },
+    } as any);
+    vi.mocked(db.order.findUnique).mockResolvedValue({
+      id: 'victim-order-1',
+      paymentId: 'victim-payment-1',
+      status: 'PENDING',
+      userId: 'victim-user',
+      tenantId: 'smmflux',
+      payment: { checkoutUrl: 'https://victim-checkout-url' },
+    } as any);
+
+    const result = await checkoutAction({
+      ...validData,
+      gateway: 'yookassa',
+      idempotencyKey: 'idemp-victim-key',
+    });
+
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('victim');
+    expect(db.order.create).not.toHaveBeenCalled();
+  });
+
+  it('6. INV-IDEM-03: balance charge is bound to the created order id', async () => {
+    vi.mocked(verifySession).mockResolvedValue({ userId: 'user-1' } as any);
+    vi.mocked(WalletOps.charge).mockResolvedValue({ success: true } as any);
+    vi.mocked(db.order.findUnique).mockResolvedValue(null);
+    vi.mocked(db.user.findUnique).mockResolvedValue({
+      id: 'user-1',
+      email: 'test@test.com',
+      balance: 5000,
+      isActive: true,
+      isDeleted: false,
+    } as any);
+    vi.mocked(db.service.findUnique).mockResolvedValue({
+      id: 'service-1',
+      isActive: true,
+      externalId: 'ext-1',
+      minQty: 10,
+      maxQty: 1000,
+      targetType: 'POST',
+      category: { network: { slug: 'tg' } },
+    } as any);
+    vi.mocked(db.order.create).mockResolvedValue({ id: 'order-77', numericId: 1077 } as any);
+    vi.mocked(db.payment.create).mockResolvedValue({ id: 'payment-77' } as any);
+
+    const result = await checkoutAction({ ...validData, gateway: 'balance' });
+
+    expect(result.success).toBe(true);
+    expect(WalletOps.charge).toHaveBeenCalledTimes(1);
+    const chargeArgs = vi.mocked(WalletOps.charge).mock.calls[0];
+    expect(JSON.stringify(chargeArgs, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).toContain('order-77');
+    expect(vi.mocked(db.order.create).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(WalletOps.charge).mock.invocationCallOrder[0]);
   });
 });

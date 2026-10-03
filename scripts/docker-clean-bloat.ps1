@@ -83,7 +83,7 @@ if ($needsUpdate) {
 # 6. Drop Linux page cache in WSL2
 Write-Host "[6/6] Dropping Linux page cache in WSL2..." -ForegroundColor Yellow
 try {
-    & wsl -e sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" 2>$null
+    & wsl -u root -e sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" 2>$null
     Write-Host "      OK: Linux page cache dropped successfully." -ForegroundColor Green
 } catch {
     Write-Host "      INFO: WSL not running or drop_caches skipped." -ForegroundColor DarkGray

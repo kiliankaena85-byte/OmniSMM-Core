@@ -86,16 +86,11 @@ export async function handleYooKassaWebhookRequest(
     const isTestMode = await SettingsProvider.isTestMode(explicitTenantId);
     const isDev = process.env.NODE_ENV === 'development';
 
-    // --- SECURITY GUARD: Yookassa Official IP Range Validation ---
-    const allowedPrefixes = [
-      '185.75.120.', '185.75.121.', '185.75.122.', '185.75.123.',
-      '37.110.12.', '37.110.13.', '37.110.14.', '37.110.15.',
-      '37.110.16.', '37.110.17.', '37.110.18.', '37.110.19.',
-      '193.106.92.', '193.106.93.', '193.106.94.', '193.106.95.',
-      '91.232.108.', '91.232.109.', '91.232.110.', '91.232.111.'
-    ];
-    const isLocal = ip === '::1' || ip === '127.0.0.1' || ip.startsWith('127.0.0.');
-    const isAllowedIp = (isDev || isTestMode) ? true : (allowedPrefixes.some(prefix => ip.startsWith(prefix)) || isLocal);
+    // --- SECURITY GUARD: Yookassa Official IP Range Validation (INV-GW-01) ---
+    // Defense-in-depth only (forwarded IP headers are spoofable); authenticity is enforced
+    // by mandatory API re-verification in confirmPayment. Test mode does NOT bypass this.
+    const { isYooKassaIp } = await import('@/lib/security/yookassa-ip');
+    const isAllowedIp = isDev ? true : isYooKassaIp(ip);
     
     if (!isAllowedIp) {
       console.error(`[YooKassa Webhook] BLOCKED: IP spoofing attempt from ${ip}`);
@@ -302,13 +297,21 @@ export async function handleYooKassaWebhookRequest(
             return NextResponse.json({ success: true, status: 'Payment processed strictly (idempotent)' }, { status: 200 });
           }
 
+          const rawMetadata = rawBody.object?.metadata;
+          const paymentMetadata = (rawMetadata && typeof rawMetadata === 'object') ? rawMetadata as Record<string, unknown> : undefined;
           const success = await paymentService.confirmPayment(
-            gId, amountCents, userId, isTestMode, 'yookassa', paymentInternalId, metadataType, receiptId
+            gId, amountCents, userId, isTestMode, 'yookassa', paymentInternalId, metadataType, receiptId, paymentMetadata
           );
 
           if (success) {
             return NextResponse.json({ success: true, status: 'Payment processed strictly' }, { status: 200 });
           } else {
+            // INV-GW-04: a transient verification failure must not be swallowed by the anti-replay key;
+            // release it so gateway retries are re-processed (DB idempotency guarantees a single credit).
+            if (replayKey) {
+              const { redis } = await import('@/lib/redis');
+              await redis.del(replayKey).catch(() => {});
+            }
             return NextResponse.json({ error: 'Payment double-check validation failed' }, { status: 400 });
           }
         });

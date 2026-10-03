@@ -6,7 +6,7 @@ services:
     container_name: laya_decision_engine
     restart: unless-stopped
     ports:
-      - "8150:8150"
+      - "127.0.0.1:8150:8150"
     environment:
       - PORT=8150
       - NODE_ENV=production

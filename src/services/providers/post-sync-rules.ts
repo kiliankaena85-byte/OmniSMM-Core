@@ -19,6 +19,8 @@
  */
 
 import { db } from '@/lib/db';
+import { CatalogLockGuard } from '@/lib/catalog-lock';
+
 
 // ============================================
 // CONFIGURATION
@@ -114,24 +116,39 @@ export async function applyPostSyncRules(tenantId: string = 'smmplan'): Promise<
     emptyCategoriesRemoved: 0,
   };
 
-  // 1. Удалить заблокированные
+  // 1. Inviolable Database Guard: If catalog is locked, NEVER delete services, reclassify, or mutate categories
+  const isCatalogLocked = await CatalogLockGuard.isLocked();
+  if (isCatalogLocked) {
+    const capResult = await db.service.updateMany({
+      where: { tenantId, maxQty: { gt: MAX_QTY_CAP } },
+      data: { maxQty: MAX_QTY_CAP },
+    });
+    result.capped = capResult.count;
+    return result;
+  }
+
+  // 2. Заблокированные — мягкое отключение (INV-CAT-02: строки витрины автоматика НЕ удаляет:
+  //    FK Order.serviceId + история цен/аудита)
   if (BLACKLISTED_SERVICES.length > 0) {
-    const r = await db.service.deleteMany({
-      where: { externalId: { in: BLACKLISTED_SERVICES } },
+    const r = await db.service.updateMany({
+      where: { tenantId, externalId: { in: BLACKLISTED_SERVICES } },
+      data: { isActive: false },
     });
     result.blacklisted = r.count;
   }
 
-  // 2. Скрыть опасные/непонятные
+  // 3. Скрыть опасные/непонятные
   if (HIDDEN_SERVICES.length > 0) {
     const r = await db.service.updateMany({
-      where: { externalId: { in: HIDDEN_SERVICES } },
+      where: { tenantId, externalId: { in: HIDDEN_SERVICES } },
       data: { isActive: false },
     });
     result.hidden = r.count;
   }
 
+
   // Preload all categories and networks into Map to eliminate N+1 queries (DEF-005)
+
   const [allCategories, allNetworks] = await Promise.all([
     db.category.findMany({ where: { tenantId } }),
     db.network.findMany(),
@@ -164,14 +181,14 @@ export async function applyPostSyncRules(tenantId: string = 'smmplan'): Promise<
     const category = await getOrCreateCategory(rule.category, network.id);
 
     const r = await db.service.updateMany({
-      where: { externalId: extId },
+      where: { tenantId, externalId: extId },
       data: { categoryId: category.id },
     });
     result.reclassified += r.count;
   }
 
   // 3.5 Динамическое выделение Автоуслуг и исправление мискатегоризаций
-  const servicesToCheck = await db.service.findMany({ include: { category: { include: { network: true } } } });
+  const servicesToCheck = await db.service.findMany({ where: { tenantId }, include: { category: { include: { network: true } } } });
   let autoReclassified = 0;
   for (const s of servicesToCheck) {
     if (!s.category || !s.category.networkId) continue;
@@ -221,21 +238,15 @@ export async function applyPostSyncRules(tenantId: string = 'smmplan'): Promise<
 
   // 4. Cap maxQty
   const capResult = await db.service.updateMany({
-    where: { maxQty: { gt: MAX_QTY_CAP } },
+    where: { tenantId, maxQty: { gt: MAX_QTY_CAP } },
     data: { maxQty: MAX_QTY_CAP },
   });
   result.capped = capResult.count;
 
-  // 5. Удалить пустые категории
-  const emptyCats = await db.category.findMany({
-    where: { tenantId, services: { none: {} } },
-  });
-  if (emptyCats.length > 0) {
-    await db.category.deleteMany({
-      where: { id: { in: emptyCats.map(c => c.id) } },
-    });
-    result.emptyCategoriesRemoved = emptyCats.length;
-  }
+  // 5. Preserve empty categories — automated deletion is disabled
+  // Empty categories created by administrators in Admin Panel must be preserved.
+  result.emptyCategoriesRemoved = 0;
 
   return result;
+
 }

@@ -156,6 +156,13 @@ const SEED_DATA = [
 ];
 
 async function main() {
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  if (isLocked) {
+    console.log('🛡️ [Catalog Preserved] Catalog is LOCKED and INVIOLABLE. Skipping seed-e2e-services.');
+    return;
+  }
+
   console.log('\n🌱 E2E Service Seeder — аддитивный режим (данные не удаляются)\n');
 
   // Найти или создать провайдера

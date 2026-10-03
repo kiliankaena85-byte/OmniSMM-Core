@@ -21,7 +21,16 @@ export default async function DashboardPage(props: { searchParams?: Promise<{ te
   const session = await verifySession(tenantId);
   if (!session) redirect('/login');
 
-  const [user, orders, referralCount] = await Promise.all([
+  const [
+    user,
+    orders,
+    referralCount,
+    activeOrders,
+    pendingPaymentsCount,
+    catalogResult,
+    origin,
+    tenantViews,
+  ] = await Promise.all([
     db.user.findFirst({
       where: { id: session.userId, tenantId },
       select: {
@@ -50,24 +59,21 @@ export default async function DashboardPage(props: { searchParams?: Promise<{ te
       },
     }),
     db.user.count({ where: { referredById: session.userId, tenantId } }),
+    db.order.count({
+      where: { userId: session.userId, tenantId, status: { in: ['IN_PROGRESS', 'PENDING', 'PROVISIONING'] } },
+    }),
+    db.payment.count({
+      where: { userId: session.userId, tenantId, status: 'PENDING', gateway: 'yookassa' },
+    }),
+    getPublicCatalogAction(tenantId),
+    getBaseUrlAsync(),
+    getTenantDashboardViews(tenantId),
   ]);
 
   if (!user) redirect('/login');
 
-  // P3.4: Use server-side headers() — no hydration mismatch
-  const origin = await getBaseUrlAsync();
-
-  const activeOrders = await db.order.count({
-    where: { userId: session.userId, tenantId, status: { in: ['IN_PROGRESS', 'PENDING', 'PROVISIONING'] } },
-  });
-
-  const hasPendingPayments = await db.payment.count({
-    where: { userId: session.userId, tenantId, status: 'PENDING', gateway: 'yookassa' }
-  }) > 0;
-
-  const { HomeView } = await getTenantDashboardViews(tenantId);
-
-  const catalogResult = await getPublicCatalogAction(tenantId);
+  const hasPendingPayments = pendingPaymentsCount > 0;
+  const { HomeView } = tenantViews;
   const catalog = catalogResult.success && catalogResult.data ? catalogResult.data : [];
 
   const userForClient = {

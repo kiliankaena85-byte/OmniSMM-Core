@@ -77,7 +77,7 @@ export default async function ReferralsPage() {
   const origin = await getBaseUrlAsync();
   const referralLink = `${origin}/?ref=${user.referralCode}`;
 
-  const earnedRub = (user.referralBalance ?? 0) / 100;
+  const earnedRub = Number(user.referralBalance ?? BigInt(0)) / 100;
   const referralsCount = user._count?.referrals ?? 0;
   const totalSpentRub = Number(user.totalSpent ?? 0) / 100;
 

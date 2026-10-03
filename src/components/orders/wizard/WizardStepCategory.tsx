@@ -135,6 +135,9 @@ export function WizardStepCategory({
                         </span>
                       )}
                     </div>
+                    {cat.description && (
+                      <div className="text-[11px] text-muted-foreground/80 line-clamp-1 mt-0.5">{cat.description}</div>
+                    )}
                     {typeof cat.serviceCount === 'number' && cat.serviceCount > 0 && (
                       <div className="text-[10px] font-medium text-muted-foreground">{cat.serviceCount} услуг</div>
                     )}

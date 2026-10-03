@@ -21,6 +21,7 @@ interface UseOrderCatalogSyncOptions {
   initialServiceId: string;
   initialServices: PublicService[];
   defaultCat: PublicCategory | null;
+  networkId?: string;
   setNetworkId: React.Dispatch<React.SetStateAction<string>>;
   categoryId: string;
   setCategoryId: React.Dispatch<React.SetStateAction<string>>;
@@ -38,6 +39,7 @@ export function useOrderCatalogSync({
   initialServiceId,
   initialServices,
   defaultCat,
+  networkId,
   setNetworkId,
   categoryId,
   setCategoryId,
@@ -214,7 +216,8 @@ export function useOrderCatalogSync({
   // Background prefetch: quietly warm up services for other categories in active network
   useEffect(() => {
     if (!catalog.length) return;
-    const activeNet = catalog.find((n) => n.id === initialNetworkId) || catalog[0];
+    const currentNetId = networkId || initialNetworkId;
+    const activeNet = catalog.find((n) => n.id === currentNetId) || catalog[0];
     if (!activeNet?.categories) return;
 
     const uncachedCats = activeNet.categories.filter(
@@ -224,25 +227,27 @@ export function useOrderCatalogSync({
 
     let isCancelled = false;
     const prefetchTimer = setTimeout(async () => {
-      for (const cat of uncachedCats) {
-        if (isCancelled) break;
-        try {
-          const svcs = await getServicesByCategoryAction(cat.id);
-          if (!isCancelled && svcs?.length > 0) {
-            categoryServicesCache.current[cat.id] = svcs;
+      // Warm up uncached categories concurrently with fail-safe error isolation
+      await Promise.allSettled(
+        uncachedCats.map(async (cat) => {
+          if (isCancelled || categoryServicesCache.current[cat.id]) return;
+          try {
+            const svcs = await getServicesByCategoryAction(cat.id);
+            if (!isCancelled && svcs && svcs.length > 0) {
+              categoryServicesCache.current[cat.id] = svcs;
+            }
+          } catch {
+            // Non-blocking prefetch failure is intentionally ignored
           }
-        } catch {
-          // Non-blocking prefetch failure is intentionally ignored
-        }
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    }, 600);
+        })
+      );
+    }, 50);
 
     return () => {
       isCancelled = true;
       clearTimeout(prefetchTimer);
     };
-  }, [catalog, categoryId, initialNetworkId]);
+  }, [catalog, categoryId, networkId, initialNetworkId]);
 
   // Live Sync on focus & visibilitychange (throttled to at most once per 30s)
   useEffect(() => {

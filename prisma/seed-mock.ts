@@ -19,6 +19,19 @@ async function main() {
     process.exit(1);
   }
 
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  if (isLocked) {
+    console.error('⛔ [INVIOLABLE DATABASE GUARD] Catalog is LOCKED. seed-mock is BLOCKED to prevent wiping configured database.');
+    process.exit(1);
+  }
+
+  const dbUrl = process.env.DATABASE_URL || '';
+  if (!dbUrl.includes('test') && !dbUrl.includes('smmplan_test')) {
+    console.error(`⛔ [SAFETY GUARD] seed-mock can ONLY run against a dedicated test database (smmplan_test). Current: ${dbUrl}`);
+    process.exit(1);
+  }
+
   console.log('Seeding massive mock data for Enterprise UX testing...');
 
   console.log('Clearing old mock records...');

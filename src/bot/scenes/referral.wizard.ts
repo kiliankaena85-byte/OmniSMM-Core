@@ -79,7 +79,7 @@ export const referralWizard = new Scenes.WizardScene<BotContext>(
       const tenantHost = getTenantHost(botTenantId);
       const host = process.env.APP_URL || (tenantHost.startsWith('http') ? tenantHost : `https://${tenantHost}`);
       const link = `${host}/?ref=${user.referralCode}`;
-      const earned = (user.referralBalance ?? 0) / 100;
+      const earned = Number(user.referralBalance ?? BigInt(0)) / 100;
       const refsCount = user._count?.referrals ?? 0;
 
       await ctx.reply(

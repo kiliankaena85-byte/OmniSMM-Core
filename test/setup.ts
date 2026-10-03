@@ -1,16 +1,7 @@
+import './setup-env';
 import { beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import dotenv from 'dotenv';
-
-// Auto-load .env.test if DATABASE_URL is not set by runner
-if (!process.env.DATABASE_URL) {
-  const envTestPath = path.resolve(process.cwd(), '.env.test');
-  if (fs.existsSync(envTestPath)) {
-    dotenv.config({ path: envTestPath });
-  }
-}
-
 import { db } from '@/lib/db';
 
 // Node.js 22 / jsdom localStorage polyfill
@@ -333,7 +324,8 @@ beforeAll(async () => {
     testPath.includes('multitenant-isolation') ||
     testPath.includes('multitenant-e2e-matrix') ||
     testPath.includes('packages/') ||
-    testPath.includes('admin-audit.test.ts')
+    testPath.includes('admin-audit.test.ts') ||
+    testPath.includes('load-stability-prisma-pool')
   ) && ![
     'marketing.test.ts',
     'smart-feedback-loop.test.ts',
@@ -533,6 +525,10 @@ beforeEach(async () => {
         'telegram-bot-security-invariants',
         'auth-verify-rate-limit',
         'wallet-ops-safety-cap',
+        'redteam-fin-core-invariants',
+        'redteam-gateways-invariants',
+        'tester-invites-and-yookassa-guard',
+        'post-sync-rules-tenant-scope',
         'logout-security-and-blacklist',
         'b2b-vault-encryption',
         'server-only-and-url-bounds',
@@ -582,7 +578,8 @@ beforeEach(async () => {
         'ai-harnesses',
         'stage1-economic',
         'harness',
-        'ast-transaction-escape'
+        'ast-transaction-escape',
+        'load-stability-prisma-pool'
       ];
       const normalizedPath = testPath.replace(/\\/g, '/').toLowerCase();
       if (skipPatterns.some(pattern => normalizedPath.includes(pattern.toLowerCase()))) {

@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/lib/auth/password';
 import { encrypt } from '../src/lib/crypto/encryption';
 import { randomBytes } from 'crypto';
+import { CatalogLockGuard } from '../src/lib/catalog-lock';
 
 // ⛔ PRODUCTION GUARD — seed.ts must NEVER run in production
 if (process.env.NODE_ENV === 'production') {
@@ -133,7 +134,16 @@ async function main() {
   console.log(`Upserted Test Client: ${testClientEmail}`);
 
   // 4. Default Networks, Categories & Services (Strict 3-Tier Hierarchy: Network -> Category -> Services)
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  const existingCategories = await prisma.category.count();
+  if (isLocked || existingCategories > 0) {
+    console.log(`🛡️ [Catalog Preserved] Catalog is ${isLocked ? 'LOCKED (INVIOLABLE)' : 'already configured'} (${existingCategories} categories). Mock catalog seeding skipped to protect configured database.`);
+    console.log('Seeding completed (Catalog protected).');
+    return;
+  }
+
   const defaultCatalogData = [
+
     {
       network: { name: 'Telegram', slug: 'telegram', icon: 'telegram', sort: 1 },
       categories: [

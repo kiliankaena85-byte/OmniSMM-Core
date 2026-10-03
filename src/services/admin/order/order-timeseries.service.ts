@@ -10,10 +10,10 @@ export class OrderTimeseriesService {
     endDate: Date,
     step: 'hour' | 'day' | 'week' | 'month',
     tenantId?: string
-  ) {
     // Quantize timestamps to 30-second buckets to ensure high cache hit rate across frequent dashboard renders
-    const quantizeTimestamp = (d: Date) => Math.floor(d.getTime() / 30_000) * 30_000;
-    const cacheKey = `orders:timeseries:${tenantId || 'all'}:${step}:${quantizeTimestamp(startDate)}:${quantizeTimestamp(endDate)}`;
+    const qStartDate = new Date(Math.floor(startDate.getTime() / 30_000) * 30_000);
+    const qEndDate = new Date(Math.floor(endDate.getTime() / 30_000) * 30_000);
+    const cacheKey = `orders:timeseries:${tenantId || 'all'}:${step}:${qStartDate.getTime()}:${qEndDate.getTime()}`;
 
     try {
       const cached = await redis.get(cacheKey);
@@ -30,7 +30,7 @@ export class OrderTimeseriesService {
           status, 
           COUNT(*)::int as count 
         FROM "Order"
-        WHERE "createdAt" >= ${startDate} AND "createdAt" <= ${endDate}
+        WHERE "createdAt" >= ${qStartDate} AND "createdAt" <= ${qEndDate}
           AND (${tenantId || null}::text IS NULL OR "tenantId" = ${tenantId || ''})
         GROUP BY DATE_TRUNC('hour', "createdAt"), status
         ORDER BY date ASC
@@ -42,7 +42,7 @@ export class OrderTimeseriesService {
           status, 
           COUNT(*)::int as count 
         FROM "Order"
-        WHERE "createdAt" >= ${startDate} AND "createdAt" <= ${endDate}
+        WHERE "createdAt" >= ${qStartDate} AND "createdAt" <= ${qEndDate}
           AND (${tenantId || null}::text IS NULL OR "tenantId" = ${tenantId || ''})
         GROUP BY DATE_TRUNC('week', "createdAt"), status
         ORDER BY date ASC
@@ -54,7 +54,7 @@ export class OrderTimeseriesService {
           status, 
           COUNT(*)::int as count 
         FROM "Order"
-        WHERE "createdAt" >= ${startDate} AND "createdAt" <= ${endDate}
+        WHERE "createdAt" >= ${qStartDate} AND "createdAt" <= ${qEndDate}
           AND (${tenantId || null}::text IS NULL OR "tenantId" = ${tenantId || ''})
         GROUP BY DATE_TRUNC('month', "createdAt"), status
         ORDER BY date ASC
@@ -65,7 +65,7 @@ export class OrderTimeseriesService {
           status, 
           COUNT(*)::int as count 
         FROM "Order"
-        WHERE "createdAt" >= ${startDate} AND "createdAt" <= ${endDate}
+        WHERE "createdAt" >= ${qStartDate} AND "createdAt" <= ${qEndDate}
           AND (${tenantId || null}::text IS NULL OR "tenantId" = ${tenantId || ''})
         GROUP BY DATE_TRUNC('day', "createdAt"), status
         ORDER BY date ASC

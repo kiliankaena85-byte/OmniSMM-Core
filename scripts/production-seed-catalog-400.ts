@@ -2,8 +2,10 @@ import 'dotenv/config';
 import { db } from '../src/lib/db';
 import { redis } from '../src/lib/redis';
 import { encrypt } from '../src/lib/crypto/encryption';
+import { CatalogLockGuard } from '../src/lib/catalog-lock';
 import fs from 'fs';
 import path from 'path';
+
 
 interface CuratedItem {
   id: string;
@@ -109,7 +111,34 @@ function cleanCategory(raw: string, net: string): string {
 }
 
 async function main() {
+  const isForce = process.argv.includes('--force-dangerously-wipe-and-reseed');
+  const isLocked = await CatalogLockGuard.isLocked();
+  const existingCatCount = await db.category.count();
+  const existingSrvCount = await db.service.count();
+
+  // 1. Inviolable Lock check: Even with --force, cannot wipe a LOCKED catalog without first explicitly unlocking
+  if (isLocked) {
+    console.error('\n⛔ [INVIOLABLE DATABASE GUARD] Production catalog seeding is BLOCKED.');
+    console.error(`   Status: Catalog is LOCKED. Database contains ${existingCatCount} categories and ${existingSrvCount} services.`);
+    console.error('   To protect configured categories and custom tariffs from being overwritten, automated seeding is prohibited.');
+    console.error('   Even with --force-dangerously-wipe-and-reseed, you must FIRST explicitly unlock the catalog via:');
+    console.error('   npx tsx scripts/lock-database.ts unlock "Reason for reseeding"');
+    console.error('   Administrators (ADMIN and OWNER) have full control to manage categories and services directly via the Admin Panel.\n');
+    process.exit(1);
+  }
+
+  // 2. Preservation check: If unlocked but data exists, require explicit --force flag
+  if (!isForce) {
+    if (existingCatCount > 0 || existingSrvCount > 0) {
+      console.error('\n🛡️ [DATABASE PRESERVATION] Database is already configured with categories and services.');
+      console.error(`   Found ${existingCatCount} categories and ${existingSrvCount} services. Aborting to protect existing catalog.`);
+      console.error('   If you are 100% sure you want to completely wipe and reseed, specify --force-dangerously-wipe-and-reseed.\n');
+      process.exit(1);
+    }
+  }
+
   console.log('🚀 [PRODUCTION CATALOG SEEDER] Starting clean production catalog population...\n');
+
 
   // 1. Clean synthetic benchmark data
   console.log('🧹 [1/6] Cleaning synthetic benchmark networks and test services...');
@@ -280,11 +309,31 @@ async function main() {
         }
       });
 
+      function getCategorySort(name: string): number {
+        const n = name.toLowerCase();
+        if (n === 'подписчики' || n.startsWith('подписчики (')) return 10;
+        if (n.includes('премиум') || n.includes('со звездой')) return 15;
+        if (n.includes('просмотр')) return 20;
+        if (n.includes('реакц') || n.includes('лайк')) return 30;
+        if (n.includes('буст')) return 40;
+        if (n.includes('репост')) return 50;
+        if (n.includes('опрос') || n.includes('голос')) return 60;
+        if (n.includes('коммент')) return 70;
+        if (n.includes('прослуш')) return 80;
+        if (n.includes('авто')) return 90;
+        if (n.includes('стрим') || n.includes('зрител')) return 100;
+        if (n.includes('бот')) return 110;
+        if (n.includes('звезд')) return 120;
+        return 999;
+      }
+
+      const catSort = getCategorySort(cleanCatName);
+
       if (existingCat) {
         categoryId = existingCat.id;
         await db.category.update({
           where: { id: existingCat.id },
-          data: { tenantId: 'all', requireWarning: false, sort: 10 }
+          data: { tenantId: 'all', requireWarning: false, sort: catSort }
         });
       } else {
         // Ensure slug unique
@@ -299,7 +348,7 @@ async function main() {
             networkId,
             tenantId: 'all',
             requireWarning: false,
-            sort: 10
+            sort: catSort
           }
         });
         categoryId = newCat.id;

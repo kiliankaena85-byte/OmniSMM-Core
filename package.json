@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build --webpack && npm run build:bot && npm run build:worker && node scripts/check-bundle-secrets.mjs && tsx scripts/ci/check-api-docs-domains.ts",
     "build:lean": "powershell -ExecutionPolicy Bypass -File scripts/lean-docker-build.ps1",
+    "deploy:lean": "powershell -ExecutionPolicy Bypass -File scripts/lean-docker-build.ps1 -Deploy",
     "docker:clean": "powershell -ExecutionPolicy Bypass -File scripts/docker-clean-bloat.ps1",
     "docker:up:lean": "tsx scripts/preflight-container-sizing.ts",
     "check:bundle-secrets": "node scripts/check-bundle-secrets.mjs",
@@ -119,6 +120,7 @@
     "@heroui/theme": "^2.4.26",
     "@mantine/core": "^9.2.1",
     "@mantine/hooks": "^9.2.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@prisma/client": "^5.20.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@tanstack/react-table": "^8.21.3",
@@ -156,7 +158,7 @@
     "telegraf": "^4.16.3",
     "telegram": "^2.26.22",
     "undici": "^7.29.0",
-    "zod": "^3.23.8"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -173,6 +175,7 @@
     "@types/sanitize-html": "^2.16.1",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.4",
+    "autocannon": "^8.0.0",
     "decimal.js": "^10.6.0",
     "docx": "^9.7.1",
     "dotenv-cli": "^11.0.0",

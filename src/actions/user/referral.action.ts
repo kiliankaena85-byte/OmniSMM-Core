@@ -12,7 +12,7 @@ export async function transferReferralBalanceAction(): Promise<{ success: boolea
       return { success: false, error: "Unauthorized" };
     }
 
-    let transferAmount = 0;
+    let transferAmount: bigint = BigInt(0);
     const transferId = crypto.randomUUID();
     
     await runSerializableTransaction(async (tx) => {
@@ -29,21 +29,18 @@ export async function transferReferralBalanceAction(): Promise<{ success: boolea
 
       transferAmount = user.referralBalance;
 
-      // 1. Atomic decrement of referral balance with TOCTOU optimistic guard
-      const updated = await tx.user.updateMany({
-        where: { 
-          id: session.userId,
-          referralBalance: { gte: transferAmount },
-          ...(user.tenantId ? { tenantId: user.tenantId } : {})
-        },
-        data: {
-          referralBalance: { decrement: transferAmount }
+      // 1. Safe referral balance debit via WalletOps primitive
+      await WalletOps.referralDebit(
+        tx,
+        session.userId,
+        transferAmount,
+        `Вывод реферального баланса на основной`,
+        { 
+          idempotencyKey: `referral-debit-${session.userId}-${transferId}`,
+          tenantId: user.tenantId || 'smmplan',
+          transactionType: 'REFERRAL_REVERSAL'
         }
-      });
-
-      if (updated.count === 0) {
-        throw new Error("Недостаточно средств на реферальном балансе");
-      }
+      );
 
       // 2. Safe main balance credit via WalletOps primitive with unique transfer ID
       await WalletOps.credit(
@@ -70,7 +67,7 @@ export async function transferReferralBalanceAction(): Promise<{ success: boolea
       });
     });
 
-    return { success: true, amount: transferAmount };
+    return { success: true, amount: Number(transferAmount) };
   } catch (error) {
     return {
       success: false,

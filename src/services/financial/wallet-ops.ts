@@ -41,6 +41,52 @@ export class ImmutableLedgerError extends Error {
   }
 }
 
+export class IdempotencyKeyReuseError extends Error {
+  readonly code = 'IDEMPOTENCY_KEY_REUSE';
+  constructor(key: string) {
+    super(`Idempotency key reused with a different payload: ${key}`);
+    this.name = 'IdempotencyKeyReuseError';
+  }
+}
+
+/**
+ * SPEC-REDTEAM-FIN-CORE-2026 / INV-IDEM-02:
+ * An idempotency hit is only a valid replay when it is the SAME operation
+ * (same user, same signed amount). Otherwise a foreign/forged key would be
+ * reported as "success" without moving money.
+ */
+function assertSameIdempotentPayload(
+  existing: { userId: string; amount: bigint },
+  userId: string,
+  signedAmount: bigint,
+  key: string
+): void {
+  if (existing.userId !== userId || existing.amount !== signedAmount) {
+    throw new IdempotencyKeyReuseError(key);
+  }
+}
+
+/**
+ * Inbound-money variant (credit/refund): a replay never moves money, so an amount
+ * drift (e.g. FX re-computation on a webhook retry) is logged, not rejected —
+ * rejecting would turn gateway retries into an infinite 500 loop. A different
+ * OWNER is never legitimate (it would silently "swallow" another user's deposit).
+ */
+function assertSameIdempotentOwner(
+  existing: { userId: string; amount: bigint },
+  userId: string,
+  signedAmount: bigint,
+  key: string
+): void {
+  if (existing.userId !== userId) {
+    throw new IdempotencyKeyReuseError(key);
+  }
+  if (existing.amount !== signedAmount) {
+    console.warn(`[WalletOps] Idempotent replay amount drift for key ${key}: ledger=${existing.amount} requested=${signedAmount}`);
+  }
+}
+
+
 export interface WalletOpsOptions {
   idempotencyKey?: string;
   adminId?: string;
@@ -49,10 +95,18 @@ export interface WalletOpsOptions {
   transactionType?: LedgerTransactionType;
   /** Разрешить повышенный лимит корректировки баланса (до 10 млн ₽ для OWNER) */
   allowElevatedCap?: boolean;
+  /**
+   * referralDebit only: clawback mode (commission reversal). The uncollectable remainder
+   * becomes referral debt (negative referralBalance). Default false = strict withdrawal.
+   */
+  allowDebt?: boolean;
 }
 
 export const MAX_ADJUSTMENT_CAP_KOPECKS = BigInt(10_000_000); // 100,000.00 RUB safety cap
 export const ELEVATED_ADJUSTMENT_CAP_KOPECKS = BigInt(1_000_000_000); // 10,000,000.00 RUB safety cap (Owner elevated)
+// Quarantine is the escalation sink for anomalies ABOVE the elevated cap (EscrowService OWNER path),
+// so its ceiling must be strictly higher; it only guards against absurd/overflow inputs.
+export const QUARANTINE_HARD_CEILING_KOPECKS = BigInt(100_000_000_000); // 1,000,000,000.00 RUB
 
 export const WalletOps = {
   /**
@@ -89,21 +143,23 @@ export const WalletOps = {
       throw new WalletUserNotFoundError(userId);
     }
 
-    if (user.balance < rawCents) {
-      throw new WalletInsufficientFundsError(rawCents, user.balance);
-    }
-
     const resolvedTenantId = tenantId || user.tenantId || 'smmplan';
 
-    // 2. Idempotency pre-check
+    // 2. Idempotency pre-check (INV-IDEM-03: BEFORE balance check, so a replay of an
+    //    already-paid charge returns cached instead of INSUFFICIENT_FUNDS)
     if (idempotencyKey) {
       const existing = await tx.ledgerEntry.findFirst({
         where: { idempotencyKey, tenantId: resolvedTenantId },
       });
       
       if (existing) {
+        assertSameIdempotentPayload(existing, userId, -rawCents, idempotencyKey);
         return { success: true, balance: user.balance, cached: true, entry: existing };
       }
+    }
+
+    if (user.balance < rawCents) {
+      throw new WalletInsufficientFundsError(rawCents, user.balance);
     }
 
     // 3. LEDGER-FIRST INVARIANT: Create LedgerEntry FIRST before updating User.balance
@@ -160,6 +216,7 @@ export const WalletOps = {
           where: { idempotencyKey, tenantId: resolvedTenantId },
         });
         if (existing) {
+          assertSameIdempotentPayload(existing, userId, -rawCents, idempotencyKey);
           const userCurrent = await tx.user.findUnique({ where: { id: userId }, select: { balance: true } });
           return { success: true, balance: userCurrent?.balance ?? null, cached: true, entry: existing };
         }
@@ -207,6 +264,7 @@ export const WalletOps = {
         where: { idempotencyKey, tenantId: resolvedTenantId },
       });
       if (existing) {
+        assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
         return { success: true, balance: null, cached: true, entry: existing };
       }
     }
@@ -245,6 +303,7 @@ export const WalletOps = {
           where: { idempotencyKey, tenantId: resolvedTenantId },
         });
         if (existing) {
+          assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
           const updatedUser = await tx.user.findUnique({ where: { id: userId }, select: { balance: true } });
           return { success: true, balance: updatedUser?.balance ?? null, cached: true, entry: existing };
         }
@@ -298,6 +357,11 @@ export const WalletOps = {
         where: { idempotencyKey, tenantId: resolvedTenantId },
       });
       if (existing) {
+        if (rawCents < BigInt(0)) {
+          assertSameIdempotentPayload(existing, userId, rawCents, idempotencyKey);
+        } else {
+          assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
+        }
         return { success: true, balance: null, cached: true, entry: existing };
       }
     }
@@ -389,13 +453,14 @@ export const WalletOps = {
         where: { idempotencyKey, tenantId: resolvedTenantId },
       });
       if (existing) {
+        assertSameIdempotentOwner(existing, userId, rawCents, idempotencyKey);
         return { success: true, balance: null, cached: true, entry: existing };
       }
     }
 
-    // Calculate safe totalSpent (down to 0 if order was paid via external gateway without prior balance charge)
+    // Calculate safe decrement to prevent negative totalSpent while avoiding Lost Update
     const currentTotalSpent = existingUser.totalSpent ?? BigInt(0);
-    const newTotalSpent = currentTotalSpent > rawCents ? currentTotalSpent - rawCents : BigInt(0);
+    const safeDecrement = currentTotalSpent > rawCents ? rawCents : currentTotalSpent;
 
     // LEDGER-FIRST INVARIANT: Create LedgerEntry BEFORE updating User.balance.
     // If ledger.create fails, the balance is never touched — preserving financial integrity.
@@ -417,7 +482,7 @@ export const WalletOps = {
       where: { id: userId },
       data: {
         balance: { increment: rawCents },
-        totalSpent: newTotalSpent
+        totalSpent: { decrement: safeDecrement }
       },
       select: { balance: true, totalSpent: true }
     });
@@ -439,6 +504,10 @@ export const WalletOps = {
     const { idempotencyKey, adminId, tenantId } = opts || {};
     const rawCents = typeof amountCents === 'bigint' ? amountCents : BigInt(amountCents);
     const absAmount = rawCents < BigInt(0) ? -rawCents : rawCents;
+    // INV-ESC-02: no empty ledger rows; ceiling is above the elevated cap so OWNER anomalies can escalate
+    if (absAmount === BigInt(0) || absAmount > QUARANTINE_HARD_CEILING_KOPECKS) {
+      throw new WalletInvalidAmountError('Adjustment');
+    }
 
     // 1. Validate User existence and tenant isolation
     const user = await tx.user.findUnique({
@@ -504,18 +573,31 @@ export const WalletOps = {
     opts?: { tenantId?: string; adminId?: string }
   ) {
     const rawCents = typeof amountCents === 'bigint' ? amountCents : BigInt(amountCents);
+    if (rawCents === BigInt(0)) {
+      throw new WalletInvalidAmountError('Adjustment');
+    }
     const { tenantId } = opts || {};
+    const absCents = rawCents < BigInt(0) ? -rawCents : rawCents;
 
+    // INV-ESC-01: a quarantined DEBIT keeps the same non-negative guard as adminAdjust
     const updatedUserBatch = await tx.user.updateMany({
       where: {
         id: userId,
+        ...(rawCents < BigInt(0) ? { balance: { gte: absCents } } : {}),
         ...(tenantId ? { tenantId } : {})
       },
       data: { balance: { increment: rawCents } }
     });
 
     if (updatedUserBatch.count === 0) {
-      throw new WalletUserNotFoundError(userId);
+      const checkUser = await tx.user.findUnique({
+        where: { id: userId },
+        select: { id: true, balance: true },
+      });
+      if (!checkUser || rawCents > BigInt(0)) {
+        throw new WalletUserNotFoundError(userId);
+      }
+      throw new WalletInsufficientFundsError(absCents, checkUser.balance);
     }
 
     const updatedUser = await tx.user.findUniqueOrThrow({
@@ -613,7 +695,7 @@ export const WalletOps = {
 
     await tx.user.update({
       where: { id: userId },
-      data: { referralBalance: { increment: Number(rawCents) } }
+      data: { referralBalance: { increment: rawCents } }
     });
 
     return { success: true, entry, cached: false };
@@ -635,11 +717,11 @@ export const WalletOps = {
       throw new WalletInvalidAmountError('Debit');
     }
 
-    const { idempotencyKey, adminId, tenantId, transactionType } = opts || {};
+    const { idempotencyKey, adminId, tenantId, transactionType, allowDebt } = opts || {};
 
     const user = await tx.user.findUnique({
       where: { id: userId },
-      select: { id: true, tenantId: true, referralBalance: true, balance: true }
+      select: { id: true, tenantId: true, referralBalance: true }
     });
 
     if (!user || (tenantId && user.tenantId !== tenantId)) {
@@ -651,9 +733,20 @@ export const WalletOps = {
       const existing = await tx.ledgerEntry.findFirst({
         where: { idempotencyKey, tenantId: resolvedTenantId },
       });
-      if (existing) return { success: true, entry: existing, cached: true };
+      if (existing) {
+        assertSameIdempotentPayload(existing, userId, -rawCents, idempotencyKey);
+        return { success: true, entry: existing, cached: true };
+      }
     }
 
+    // INV-REF-02: withdrawals (transfer to main / admin payout) never create debt.
+    const currentRefBalance = user.referralBalance ?? BigInt(0);
+    if (!allowDebt && currentRefBalance < rawCents) {
+      throw new WalletInsufficientFundsError(rawCents, currentRefBalance);
+    }
+
+    // LEDGER-FIRST: the entry is written before the balance moves; any failure below
+    // rolls the whole transaction back together with this row.
     const entry = await tx.ledgerEntry.create({
       data: {
         userId,
@@ -667,36 +760,25 @@ export const WalletOps = {
       }
     });
 
-    const currentRefBalance = user.referralBalance ?? 0;
-    const reqAmountNumber = Number(rawCents);
-    const debitFromReferral = Math.min(Math.max(0, currentRefBalance), reqAmountNumber);
-    const shortage = reqAmountNumber - debitFromReferral;
+    // INV-REF-01: referralBalance moves by EXACTLY the ledger amount. In clawback mode
+    // (allowDebt) an uncollectable remainder becomes referral debt (negative balance)
+    // that future commissions repay; the client's own main balance is never touched.
+    const updated = await tx.user.updateMany({
+      where: {
+        id: userId,
+        ...(allowDebt ? {} : { referralBalance: { gte: rawCents } }),
+        ...(tenantId ? { tenantId } : {})
+      },
+      data: { referralBalance: { decrement: rawCents } }
+    });
 
-    if (debitFromReferral > 0) {
-      await tx.user.updateMany({
-        where: {
-          id: userId,
-          referralBalance: { gte: debitFromReferral },
-          ...(tenantId ? { tenantId } : {})
-        },
-        data: { referralBalance: { decrement: debitFromReferral } }
-      });
+    if (updated.count !== 1) {
+      if (allowDebt) throw new WalletUserNotFoundError(userId);
+      throw new WalletInsufficientFundsError(rawCents, currentRefBalance);
     }
 
-    if (shortage > 0) {
-      const availableMain = user.balance > BigInt(0) ? user.balance : BigInt(0);
-      const debitFromMain = BigInt(shortage) > availableMain ? availableMain : BigInt(shortage);
-      if (debitFromMain > BigInt(0)) {
-        await tx.user.updateMany({
-          where: {
-            id: userId,
-            balance: { gte: debitFromMain },
-            ...(tenantId ? { tenantId } : {})
-          },
-          data: { balance: { decrement: debitFromMain } }
-        });
-      }
-      console.warn(`[WalletOps.referralDebit] User ${userId}: insufficient referralBalance (${currentRefBalance} < ${reqAmountNumber}). Debited ${debitFromReferral} from referral, ${debitFromMain} from main balance.`);
+    if (allowDebt && currentRefBalance < rawCents) {
+      console.warn(`[WalletOps.referralDebit] User ${userId}: clawback ${rawCents} exceeds referralBalance ${currentRefBalance}; referral debt ${rawCents - currentRefBalance} recorded.`);
     }
 
     return { success: true, entry, cached: false };

@@ -9,6 +9,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { revalidateCatalogCache } from "./revalidate";
 import { normalizeIconDescriptor } from "@/lib/icons/safe-svg";
 import { cyrillicToSlug } from "@/utils/slugify";
+import { CatalogLockGuard } from "@/lib/catalog-lock";
 
 const categorySchema = z.object({
   name: z.string().min(1, "Название категории обязательно").max(255, "Category name too long"),
@@ -587,5 +588,57 @@ export async function cleanupEmptyCategoriesAction(networkId?: string | null) {
     };
   });
 }
+
+/**
+ * Returns current catalog lock and inviolability status.
+ * Accessible to administrators and staff with CATALOG permissions.
+ */
+export async function getCatalogLockStatusAction() {
+  return requireStaffPermission('CATALOG', 'view', async (admin) => {
+    const isLocked = await CatalogLockGuard.isLocked();
+    const status = await CatalogLockGuard.getStatus();
+    return {
+      success: true as const,
+      isLocked,
+      canManage: admin.role === 'ADMIN' || admin.role === 'OWNER',
+      updatedAt: status.updatedAt,
+      updatedBy: status.updatedBy
+    };
+  });
+}
+
+/**
+ * Toggles catalog lock status.
+ * Both ADMIN and OWNER roles have full authority to lock or unlock the catalog.
+ */
+export async function toggleCatalogLockAction(lock: boolean, reason?: string) {
+  return requireStaffPermission('CATALOG', 'edit', async (admin) => {
+    if (admin.role !== 'ADMIN' && admin.role !== 'OWNER') {
+      return { 
+        success: false as const, 
+        error: 'Только Администратор (ADMIN) или Владелец (OWNER) могут изменять статус блокировки каталога.' 
+      };
+    }
+
+    if (lock) {
+      await CatalogLockGuard.lockCatalog(admin.email);
+    } else {
+      await CatalogLockGuard.unlockCatalog(admin.email, reason || 'Ручная разблокировка администратором через панель управления');
+    }
+
+    await auditAdminAwaitable({
+      adminId: admin.id,
+      adminEmail: admin.email,
+      action: lock ? 'CATALOG_LOCK' : 'CATALOG_UNLOCK',
+      target: 'CATALOG_LOCK',
+      targetType: 'SETTINGS',
+      newValue: { locked: lock, reason: reason || null, updatedBy: admin.email }
+    });
+
+    revalidateCatalogCache();
+    return { success: true as const, isLocked: lock };
+  });
+}
+
 
 

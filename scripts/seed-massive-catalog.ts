@@ -1252,6 +1252,17 @@ const MASSIVE_CATALOG: CuratedNetworkDef[] = [
 ];
 
 async function main() {
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  const existingCats = await prisma.category.count();
+  if (isLocked) {
+    console.error(`⛔ [GUARD] Catalog is LOCKED & INVIOLABLE. Aborting seed-massive-catalog. Unlock via scripts/lock-database.ts unlock first.`);
+    process.exit(1);
+  }
+  if (existingCats > 0 && !process.argv.includes('--force')) {
+    console.error(`⛔ [GUARD] Database already contains ${existingCats} existing categories. Aborting seed-massive-catalog.`);
+    process.exit(1);
+  }
   console.log('🚀 Seeding Expanded Massive Catalog (50+ Curated Services) with 10.0x (+900%) Pricing Model...');
 
   // Ensure mock provider

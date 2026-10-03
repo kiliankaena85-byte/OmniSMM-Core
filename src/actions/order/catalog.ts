@@ -18,7 +18,11 @@ import {
   getCachedCategoryServicesWithRedis,
   getCachedPublicCatalogWithRedis,
   getCachedProcessedServicesWithRedis,
+  invalidateL1CatalogCache as clearCatalogL1Cache,
+  invalidateCatalogCache,
 } from "@/services/catalog/catalog-cache.service";
+
+export { clearCatalogL1Cache, invalidateCatalogCache };
 
 /**
  * AUD-05 (3.1): shared visibility condition for storefront taxonomy.
@@ -52,52 +56,58 @@ function storefrontCategoryVisibility(tenantId: string) {
 export async function getCachedNetworks(rawTenantId: string) {
   const tenantId = normalizeTenantId(rawTenantId);
   return getCachedNetworksWithRedis(tenantId, async () => {
-    return unstable_cache(
-      async () => {
-        return await db.network.findMany({
-          where: {
-            isActive: true,
-            tenantId: tenantVisibilityFilter(tenantId),
-            categories: { some: storefrontCategoryVisibility(tenantId) },
-          },
-          include: {
-            categories: {
-              where: storefrontCategoryVisibility(tenantId),
-              orderBy: { sort: 'asc' },
-              include: {
-                _count: {
-                  select: {
-                    services: {
-                      where: {
-                        isActive: true,
-                        isQuarantined: false,
-                        tenantId: tenantVisibilityFilter(tenantId),
-                        OR: [{ cooldownUntil: null }, { cooldownUntil: { lt: new Date() } }],
-                      }
+    const fetchNetworksFromDb = async () => {
+      return await db.network.findMany({
+        where: {
+          isActive: true,
+          tenantId: tenantVisibilityFilter(tenantId),
+          categories: { some: storefrontCategoryVisibility(tenantId) },
+        },
+        include: {
+          categories: {
+            where: storefrontCategoryVisibility(tenantId),
+            orderBy: { sort: 'asc' },
+            include: {
+              _count: {
+                select: {
+                  services: {
+                    where: {
+                      isActive: true,
+                      isQuarantined: false,
+                      tenantId: tenantVisibilityFilter(tenantId),
+                      OR: [{ cooldownUntil: null }, { cooldownUntil: { lt: new Date() } }],
                     }
                   }
+                }
+              },
+              services: {
+                where: {
+                  isActive: true,
+                  isQuarantined: false,
+                  tenantId: tenantVisibilityFilter(tenantId),
+                  OR: [{ cooldownUntil: null }, { cooldownUntil: { lt: new Date() } }],
                 },
-                services: {
-                  where: {
-                    isActive: true,
-                    isQuarantined: false,
-                    tenantId: tenantVisibilityFilter(tenantId),
-                    OR: [{ cooldownUntil: null }, { cooldownUntil: { lt: new Date() } }],
-                  },
-                  select: {
-                    targetType: true,
-                    name: true
-                  }
+                select: {
+                  targetType: true,
+                  name: true
                 }
               }
             }
-          },
-          orderBy: { sort: 'asc' }
-        });
-      },
-      [`public-catalog-networks-v5-${tenantId}`],
-      { revalidate: 60, tags: ['catalog', `catalog-${tenantId}`, `networks-${tenantId}`] }
-    )();
+          }
+        },
+        orderBy: { sort: 'asc' }
+      });
+    };
+
+    try {
+      return await unstable_cache(
+        fetchNetworksFromDb,
+        [`public-catalog-networks-v5-${tenantId}`],
+        { revalidate: 60, tags: ['catalog', `catalog-${tenantId}`, `networks-${tenantId}`] }
+      )();
+    } catch {
+      return await fetchNetworksFromDb();
+    }
   });
 }
 
@@ -111,76 +121,82 @@ const CATEGORY_SERVICES_HARD_LIMIT = 500;
 export async function getCachedServicesByCategory(categoryId: string, tenantId: string = 'smmplan') {
   const normalizedTenant = normalizeTenantId(tenantId);
   return getCachedCategoryServicesWithRedis(categoryId, normalizedTenant, async () => {
-    return unstable_cache(
-      async () => {
-        const services = await db.service.findMany({
-          where: {
-            categoryId: categoryId,
-            isActive: true,
-            isQuarantined: false,
-            tenantId: tenantVisibilityFilter(normalizedTenant),
-            OR: [{ cooldownUntil: null }, { cooldownUntil: { lt: new Date() } }]
-          },
-          select: {
-            id: true,
-            numericId: true,
-            slug: true,
-            categoryId: true,
-            name: true,
-            description: true,
-            minQty: true,
-            maxQty: true,
-            isDripFeedEnabled: true,
-            isRefillEnabled: true,
-            targetType: true,
-            qualityTier: true,
-            customDataType: true,
-            customDataLabel: true,
-            clientRequirement: true,
-            clientConfirmation: true,
-            features: true,
-            cooldownUntil: true,
-            etaP50Seconds: true,
-            etaP90Seconds: true,
-            etaSpeedClass: true,
-            requireWarning: true,
-            warningMessage: true,
-            providerCurrency: true,
-            costPer1kRub: true,
-            pricePer1000Cents: true,
-            markup: true,
-            rate: true,
-            linkPlaceholder: true,
-            linkHint: true,
-            smartConfig: {
-              select: {
-                isEnabled: true,
-                isTestMode: true,
-                minChunk: true,
-                maxChunk: true,
-                markup: true,
-                useInviteBuffer: true,
-                autoCompensate: true,
-                checkIntervalMins: true
-              }
+    const fetchServicesFromDb = async () => {
+      const services = await db.service.findMany({
+        where: {
+          categoryId: categoryId,
+          isActive: true,
+          isQuarantined: false,
+          tenantId: tenantVisibilityFilter(normalizedTenant),
+          OR: [{ cooldownUntil: null }, { cooldownUntil: { lt: new Date() } }]
+        },
+        select: {
+          id: true,
+          numericId: true,
+          slug: true,
+          categoryId: true,
+          name: true,
+          description: true,
+          minQty: true,
+          maxQty: true,
+          isDripFeedEnabled: true,
+          isRefillEnabled: true,
+          targetType: true,
+          qualityTier: true,
+          customDataType: true,
+          customDataLabel: true,
+          clientRequirement: true,
+          clientConfirmation: true,
+          features: true,
+          cooldownUntil: true,
+          etaP50Seconds: true,
+          etaP90Seconds: true,
+          etaSpeedClass: true,
+          requireWarning: true,
+          warningMessage: true,
+          providerCurrency: true,
+          costPer1kRub: true,
+          pricePer1000Cents: true,
+          markup: true,
+          rate: true,
+          linkPlaceholder: true,
+          linkHint: true,
+          smartConfig: {
+            select: {
+              isEnabled: true,
+              isTestMode: true,
+              minChunk: true,
+              maxChunk: true,
+              markup: true,
+              useInviteBuffer: true,
+              autoCompensate: true,
+              checkIntervalMins: true
             }
-          },
-          orderBy: { rate: 'asc' },
-          take: CATEGORY_SERVICES_HARD_LIMIT + 1
-        });
-        if (services.length > CATEGORY_SERVICES_HARD_LIMIT) {
-          logger.warn(`[catalog] AUD-07: category ${categoryId} exceeds ${CATEGORY_SERVICES_HARD_LIMIT} services (${services.length}); storefront shows the cheapest ${CATEGORY_SERVICES_HARD_LIMIT} — consider splitting the category`, { categoryId, tenantId: normalizedTenant, count: services.length });
-        }
-        
-        // Convert BigInt to Number for JSON serialization in unstable_cache and Redis
-        return services.slice(0, CATEGORY_SERVICES_HARD_LIMIT).map(s => ({
-          ...s,
-          pricePer1000Cents: typeof s.pricePer1000Cents === 'bigint' ? Number(s.pricePer1000Cents) : s.pricePer1000Cents
-        }));
-      },
-      [`public-services-by-category-v4-tenant-${normalizedTenant}-${categoryId}`],
-      { revalidate: 60, tags: ['catalog', 'services', `catalog-${normalizedTenant}`, `category-${categoryId}-${normalizedTenant}`] }
-    )();
+          }
+        },
+        orderBy: { rate: 'asc' },
+        take: CATEGORY_SERVICES_HARD_LIMIT + 1
+      });
+      if (services.length > CATEGORY_SERVICES_HARD_LIMIT) {
+        logger.warn(`[catalog] AUD-07: category ${categoryId} exceeds ${CATEGORY_SERVICES_HARD_LIMIT} services (${services.length}); storefront shows the cheapest ${CATEGORY_SERVICES_HARD_LIMIT} — consider splitting the category`, { categoryId, tenantId: normalizedTenant, count: services.length });
+      }
+      
+      // Convert BigInt to Number for JSON serialization in unstable_cache and Redis
+      return services.slice(0, CATEGORY_SERVICES_HARD_LIMIT).map(s => ({
+        ...s,
+        pricePer1000Cents: typeof s.pricePer1000Cents === 'bigint' ? Number(s.pricePer1000Cents) : s.pricePer1000Cents
+      }));
+    };
+
+    try {
+      return await unstable_cache(
+        fetchServicesFromDb,
+        [`public-services-by-category-v4-tenant-${normalizedTenant}-${categoryId}`],
+        { revalidate: 60, tags: ['catalog', 'services', `catalog-${normalizedTenant}`, `category-${categoryId}-${normalizedTenant}`] }
+      )();
+    } catch {
+      return await fetchServicesFromDb();
+    }
   });
 }
 
@@ -241,6 +257,7 @@ export type PublicCategory = {
   id: string;
   name: string;
   slug: string;
+  description?: string | null;
   networkId: string | null;
   requireWarning?: boolean;
   warningMessage?: string | null;
@@ -341,6 +358,7 @@ export async function getPublicCatalogAction(rawTenantId: string = 'smmplan') {
               id: cat.id,
               name: cat.name,
               slug: cat.slug,
+              description: 'description' in cat ? (cat as { description?: string | null }).description : null,
               networkId: cat.networkId,
               requireWarning: cat.requireWarning,
               warningMessage: cat.warningMessage,

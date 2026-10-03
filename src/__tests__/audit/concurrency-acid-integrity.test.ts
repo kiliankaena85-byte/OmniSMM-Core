@@ -137,7 +137,7 @@ describe('Audit R4: Concurrency & ACID Financial Integrity Invariants', () => {
   describe('R4-P1-01: Non-Atomic In-Memory Calculation of User.totalSpent in WalletOps.refund', () => {
     const walletOpsPath = path.resolve(process.cwd(), 'src/services/financial/wallet-ops.ts');
 
-    it('AST Invariant: WalletOps.refund calculates totalSpent in memory and writes absolute value', () => {
+    it('AST Invariant (fixed): WalletOps.refund mutates totalSpent atomically via decrement, never writes an absolute value', () => {
       const content = fs.readFileSync(walletOpsPath, 'utf-8');
 
       const refundFnIndex = content.indexOf('async refund(');
@@ -145,16 +145,14 @@ describe('Audit R4: Concurrency & ACID Financial Integrity Invariants', () => {
       const nextFnIndex = content.indexOf('async quarantineAdd(', refundFnIndex);
       const refundBody = content.substring(refundFnIndex, nextFnIndex > 0 ? nextFnIndex : refundFnIndex + 3500);
 
-      // 1. Reads current totalSpent into memory
-      expect(refundBody.includes('const currentTotalSpent = existingUser.totalSpent ?? BigInt(0)')).toBe(true);
+      // 1. The clamp is computed only to avoid a negative totalSpent...
+      expect(refundBody.includes('const safeDecrement = currentTotalSpent > rawCents ? rawCents : currentTotalSpent')).toBe(true);
 
-      // 2. Calculates in JS memory
-      expect(refundBody.includes('const newTotalSpent = currentTotalSpent > rawCents')).toBe(true);
+      // 2. ...but the write is an atomic relative decrement (no lost update under concurrency)
+      expect(refundBody.includes('totalSpent: { decrement: safeDecrement }')).toBe(true);
+      expect(/totalSpent:\s*newTotalSpent/.test(refundBody)).toBe(false);
 
-      // 3. Writes absolute value (lost update under concurrency)
-      expect(refundBody.includes('totalSpent: newTotalSpent')).toBe(true);
-
-      // 4. Unlike balance which uses atomic { increment: rawCents }
+      // 3. Balance is likewise atomic
       expect(refundBody.includes('balance: { increment: rawCents }')).toBe(true);
     });
 

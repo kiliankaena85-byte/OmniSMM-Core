@@ -11,6 +11,8 @@ export const UNIFIED_REGEX = {
     CHANNEL: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/(?:joinchat\/|\+|s\/|boost\/)?(?:c\/\d+|@?[\w-]+)(?:\/boost)?\/?(?:\?.*)?$/i,
     // Allows posts: t.me/channel/123, topic posts: t.me/group/100/250, web previews: t.me/s/channel/123
     POST: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/(?:s\/)?[\w-]+\/(?:topic\/)?\d+(?:\/\d+)?\/?(?:\?.*)?$/i,
+    // Allows posts in private channels (t.me/c/1234567890/123) as well as public channels
+    PRIVATE_POST: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/(?:c\/\d+\/(?:topic\/)?\d+(?:\/\d+)?|(?:s\/)?[\w-]+\/(?:topic\/)?\d+(?:\/\d+)?)\/?(?:\?.*)?$/i,
     // Allows stories: t.me/channel/s/123
     STORY: /^https?:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/[\w-]+\/s\/\d+\/?$/i,
     // Allows comments: t.me/channel/123?comment=456
@@ -122,16 +124,27 @@ export const UNIFIED_REGEX = {
 /**
  * Returns a compiled Zod schema validator for a specific platform and targetType.
  */
-export function getUnifiedLinkValidator(platform: string, targetType: string): z.ZodType<string> {
+export function getUnifiedLinkValidator(
+  platform: string,
+  targetType: string,
+  options?: { isPrivate?: boolean }
+): z.ZodType<string> {
   const normPlatform = (platform || '').toUpperCase();
   const normTarget = (targetType || '').toUpperCase();
+  const isPrivate = options?.isPrivate === true || normTarget === 'PRIVATE_POST';
 
   switch (normPlatform) {
     case 'TELEGRAM':
       if (normTarget === 'CHANNEL' || normTarget === 'CHANNEL_POSTS' || normTarget === 'PROFILE') {
         return z.string().regex(UNIFIED_REGEX.TELEGRAM.CHANNEL, "Укажите ссылку на канал или чат Telegram (например, https://t.me/durov)");
       }
-      if (normTarget === 'POST') {
+      if (normTarget === 'POST' || normTarget === 'PRIVATE_POST') {
+        if (isPrivate) {
+          return z.string().regex(
+            UNIFIED_REGEX.TELEGRAM.PRIVATE_POST,
+            "Укажите ссылку на пост Telegram (например, https://t.me/durov/123 или https://t.me/c/1234567890/123)"
+          );
+        }
         return z.string()
           .refine(val => !val.includes('/c/'), "Невозможно заказать услугу в закрытый чат (ссылка содержит /c/). Сделайте канал публичным.")
           .and(z.string().regex(UNIFIED_REGEX.TELEGRAM.POST, "Укажите ссылку на конкретный пост (например, https://t.me/durov/123)"));
@@ -344,6 +357,18 @@ export function getUnifiedLinkSpecification(
 
   // 1. Telegram
   if (net.includes('telegram') || net === 'tg') {
+    if (target === 'PRIVATE_POST' || act.includes('PRIVATE_POST')) {
+      return {
+        targetType: 'PRIVATE_POST',
+        placeholder: 'https://t.me/c/1234567890/1234',
+        hint: 'Ссылка на публикацию в закрытом канале (формат t.me/c/...)',
+        regex: '^https?:\\/\\/(?:t\\.me|telegram\\.me|telegram\\.dog)\\/(?:c\\/\\d+\\/|(?:s\\/)?[\\w-]+\\/)(?:topic\\/)?\\d+',
+        clientRequirement: 'Бот или аккаунты сервиса должны состоять в данном закрытом канале',
+        requiresBotAdmin: false,
+        isMediaGroupAware: true,
+        customDataType: 'NONE',
+      };
+    }
     if (target === 'CHANNEL' || act.includes('SUBSCRIBER') || act.includes('MEMBER') || act.includes('BOOST') || act.includes('GROUP')) {
       return {
         targetType: 'CHANNEL',

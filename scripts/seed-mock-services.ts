@@ -59,6 +59,13 @@ const DATA = [
 ];
 
 async function main() {
+  const { CatalogLockGuard } = await import('../src/lib/catalog-lock');
+  const isLocked = await CatalogLockGuard.isLocked().catch(() => true);
+  if (isLocked) {
+    console.error('⛔ [INVIOLABLE DATABASE GUARD] Catalog is LOCKED. seed-mock-services is aborted.');
+    process.exit(1);
+  }
+
   console.log('🌱 Starting DB Seeding for TG, VK, Insta...');
 
   // Ensure mock provider
