@@ -23,15 +23,15 @@ export function GenerateBatchModal({ tenantId, onSuccess }: Props) {
     setError(null);
     try {
       const res = await generateTesterInvitesAction({ count, note, tenantId });
-      if (res.success && res.invites) {
-        const urls = res.invites.map((i: any) => i.url);
+      if (res.success) {
+        const urls = res.invites.map((i) => i.url);
         setGeneratedLinks(urls);
         onSuccess();
       } else {
         setError(res.error || 'Ошибка генерации ссылок');
       }
-    } catch (err: any) {
-      setError(err?.message || 'Ошибка генерации');
+    } catch (err: unknown) {
+      setError(err instanceof Error && err.message ? err.message : 'Ошибка генерации');
     } finally {
       setLoading(false);
     }

@@ -1,6 +1,11 @@
 import crypto from 'crypto';
 import { db } from '@/lib/db';
 import { logger } from '@/lib/logger';
+import type { Prisma } from '@prisma/client';
+
+export type ValidatedInvite = Prisma.TesterInviteGetPayload<{
+  include: { createdBy: { select: { id: true; email: true } } };
+}>;
 
 export interface GeneratedInviteItem {
   code: string;
@@ -44,8 +49,7 @@ export class TesterInvitesService {
       data: invites,
     });
 
-    logger.info({
-      msg: '[TesterInvitesService] Generated tester invites batch',
+    logger.info('[TesterInvitesService] Generated tester invites batch', {
       tenantId,
       count: safeCount,
       createdById,
@@ -63,7 +67,7 @@ export class TesterInvitesService {
   public static async validateInvite(
     code: string,
     tenantId?: string
-  ): Promise<{ valid: boolean; error?: string; invite?: any }> {
+  ): Promise<{ valid: boolean; error?: string; invite?: ValidatedInvite }> {
     if (!code || typeof code !== 'string') {
       return { valid: false, error: 'Код приглашения не указан' };
     }
@@ -157,8 +161,7 @@ export class TesterInvitesService {
         });
       });
 
-      logger.info({
-        msg: '[TesterInvitesService] Successfully redeemed tester invite',
+      logger.info('[TesterInvitesService] Successfully redeemed tester invite', {
         code,
         userId,
         userEmail,
@@ -169,16 +172,16 @@ export class TesterInvitesService {
         success: true,
         message: 'Статус тестировщика успешно активирован! Теперь вам доступно тестовое пополнение и оформление заказов.',
       };
-    } catch (err: any) {
-      logger.warn({
-        msg: '[TesterInvitesService] Redemption failed',
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : undefined;
+      logger.warn('[TesterInvitesService] Redemption failed', {
         code,
         userId,
-        error: err?.message,
+        error: reason,
       });
       return {
         success: false,
-        error: err?.message || 'Не удалось активировать ссылку-приглашение',
+        error: reason || 'Не удалось активировать ссылку-приглашение',
       };
     }
   }
@@ -196,7 +199,7 @@ export class TesterInvitesService {
     const limit = Math.max(1, Math.min(params.limit || 50, 100));
     const skip = (page - 1) * limit;
 
-    const where: any = { tenantId: params.tenantId };
+    const where: Prisma.TesterInviteWhereInput = { tenantId: params.tenantId };
     if (params.status && params.status !== 'ALL') {
       where.status = params.status;
     }

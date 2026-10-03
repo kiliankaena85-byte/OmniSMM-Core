@@ -58,6 +58,8 @@ export interface WizardOrderData {
   totalCents?: number;
   providerCostCents?: number;
   totalQuantity?: number;
+  /** [VULN-TG-02] Ключ идемпотентности оформления: фиксируется при первом клике, переиспользуется при повторных. */
+  idempotencyKey?: string;
 }
 
 export function getOrderData(ctx: BotContext): WizardOrderData {

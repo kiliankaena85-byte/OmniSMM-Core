@@ -17,8 +17,8 @@ async function validateTelegramInitData(initData: string, tenantId?: string): Pr
   let botToken = process.env.TELEGRAM_BOT_TOKEN || '';
   if (tenantId) {
     try {
-      const { tokenResolver } = await import('@/lib/telegram/token-resolver');
-      const resolved = await tokenResolver.resolveBotToken(tenantId);
+      const { resolveTelegramToken } = await import('@/lib/telegram/token-resolver');
+      const resolved = await resolveTelegramToken(tenantId);
       if (resolved) botToken = resolved;
     } catch {
       // fallback to env
