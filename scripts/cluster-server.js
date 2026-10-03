@@ -15,6 +15,9 @@ if (useCluster && cluster.isPrimary && numWorkers > 1) {
   console.log(`[OmniSMM Cluster] Master PID ${process.pid} is online (${availableCores} host cores detected).`);
   console.log(`[OmniSMM Cluster] Forking ${numWorkers} worker processes with automatic restart...`);
 
+  // SPEC-POSTDEPLOY-POOL-SYNC-2026: воркеры наследуют env — db.ts делит бюджет пула на фактическое число воркеров
+  process.env.CLUSTER_WORKERS = String(numWorkers);
+
   for (let i = 0; i < numWorkers; i++) {
     cluster.fork();
   }

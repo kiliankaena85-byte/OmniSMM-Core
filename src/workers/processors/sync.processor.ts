@@ -8,9 +8,13 @@ import { sendOrderCompletedMail } from '../../lib/smtp';
 import { logger } from '../../lib/logger';
 import { runWithTenantBypass } from '../../lib/tenant-context';
 import type { ProviderMultiStatusResponse } from '../../services/providers/base-provider';
+import { createWarnThrottle, describeError } from './sync-warning-throttle';
 
 // tenant-isolation-ignore: Global cron job operating on all tenants
 const log = logger.child({ component: 'SyncProcessor' });
+
+// INV-SYNC-02: заказ с невалидным ответом провайдера не должен засорять лог каждые 5 минут
+const invalidStatusWarnThrottle = createWarnThrottle({ windowMs: 60 * 60 * 1000, maxKeys: 5000 });
 
 async function safeUpdateOrderStatus(
   tx: Prisma.TransactionClient, 
@@ -115,7 +119,7 @@ export default async function syncProcessor(job: Job<SyncJobPayload>) {
             }
           });
         } catch (batchErr) {
-          log.warn(`[SyncProcessor] Batch status polling failed for ${providerDef.name}, falling back to 1-by-1 query:`, { error: batchErr });
+          log.warn(`[SyncProcessor] Batch status polling failed for ${providerDef.name} (${describeError(batchErr)}), falling back to 1-by-1 query:`, { error: describeError(batchErr) });
           try {
             await db.provider.update({
               where: { id: providerDef.id },
@@ -223,7 +227,10 @@ export default async function syncProcessor(job: Job<SyncJobPayload>) {
 
         // Check if provider returned an explicit error status payload
         if (typeof statusObj === 'string' || !statusObj.status) {
-          log.warn(`Invalid multi-status response for Order ${order.id}`, { statusObj });
+          // INV-SYNC-03: статус/возвраты НЕ трогаем — заказ остаётся IN_PROGRESS до ручного решения
+          if (invalidStatusWarnThrottle.shouldWarn(order.id)) {
+            log.warn(`Invalid multi-status response for Order ${order.id} (provider=${providerDef.name}, externalId=${order.externalId}) — manual review required; repeats suppressed for 1h`, { statusObj });
+          }
           continue;
         }
 

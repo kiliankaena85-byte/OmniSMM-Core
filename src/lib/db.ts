@@ -1,5 +1,6 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { createTenantEnforcerExtension } from './prisma-tenant-enforcer';
+import { resolvePoolLimit } from './db-pool-size';
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -28,8 +29,8 @@ export function getDatasourceUrl(): string | undefined {
     try {
       const parsed = new URL(url);
       if (!parsed.searchParams.has('connection_limit')) {
-        const poolLimit = process.env.APP_ROLE === 'worker' ? '5' : (process.env.DATABASE_POOL_SIZE || '50');
-        parsed.searchParams.set('connection_limit', poolLimit);
+        // SPEC-POSTDEPLOY-POOL-SYNC-2026: бюджет соединений делится между воркерами кластера
+        parsed.searchParams.set('connection_limit', resolvePoolLimit(process.env));
       }
       if (!parsed.searchParams.has('pool_timeout')) {
         parsed.searchParams.set('pool_timeout', '10');
