@@ -1,3 +1,10 @@
+- [x] 🤖 [OMNISMM-TELEGRAM-BOT-TOKEN-CONFIG-2026-10-03] Подключение и запуск Telegram-бота `@SMMplan_support_bot`:
+  * Токен бота зашифрован (AES-256-GCM via `VaultService`) и сохранен в PostgreSQL (`SystemSettings.telegramBotToken`);
+  * Синхронизирована запись в `TelegramBotInstance` со статусом `ACTIVE` и ролью `STORE_FULL`;
+  * Обновлен `.env` (`TELEGRAM_BOT_TOKEN`);
+  * Контейнер `smmplan_bot` запущен, выполнил очистку зависших вебхуков, зарегистрировал команды меню и успешно перешел в активный режим polling (heartbeat обновляется каждые 30с);
+  * CI-гейт секретов `check-bundle-secrets.mjs` — 0 утечек.
+
 - [x] 🚀 [OMNISMM-TESTER-INVITES-AND-YOOKASSA-GUARD-2026-10-03] Система инвайтов тестировщиков и защита платежей ЮKassa (SPEC-TESTER-INVITES-2026) ВЫКАТАНЫ В PRODUCTION по протоколу BGS-2026:
   * 🎟️ **Одноразовые инвайты тестировщиков (`/invite/[code]`):**
     - Модель `TesterInvite` в Prisma с индексами `code`, `[status, expiresAt]`, `tenantId`;
