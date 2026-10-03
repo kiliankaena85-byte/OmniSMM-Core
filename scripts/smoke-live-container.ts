@@ -14,6 +14,16 @@ process.env.DATABASE_URL = pgUrl;
 process.env.POSTGRES_PRISMA_URL = pgUrl;
 process.env.POSTGRES_URL = pgUrl;
 
+// SAFETY GUARD (QA-008): скрипт МУТИРУЕТ БД (создаёт заказ, WalletOps.charge, isTester).
+// Fail-closed: на боевую БД (smmplan_lite / порт 5435) без явного флага не запускается.
+{
+  const looksProd = /\/smmplan_lite(\?|$)/.test(pgUrl) || /:5435\//.test(pgUrl);
+  if (looksProd && process.env.SMOKE_ALLOW_PROD_WRITES !== 'I_UNDERSTAND_THIS_WRITES_TO_PROD') {
+    console.error('⛔ smoke-live-container: DATABASE_URL указывает на БОЕВУЮ БД. Скрипт пишет в БД. Используйте тестовую БД (.env.test) или Stage.');
+    process.exit(2);
+  }
+}
+
 import { randomUUID } from 'crypto';
 
 interface TestResult {
